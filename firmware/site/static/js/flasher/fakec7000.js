@@ -308,8 +308,10 @@ export class FakeC7000 {
 		// romNak: the boot ROM answers the load's frames with something other than its acknowledgement; slowCable: ms the
 		// cable takes to carry what the host writes (longer than romWindow: the answer to the greeting comes too late);
 		// badWrite: how many of the next WRITEs (op 0x0E) leave a bit wrong in their sector; writeStatus: the status every
-		// WRITE answers instead (0x0F write protected, 0x0C flash busy too long), 0 = none
-		this.faults = { flip: 0, misplace: [], silentAfterReset: false, romEcho: false, romNak: false, slowCable: 0, badWrite: 0,
+		// WRITE answers instead (0x0F write protected, 0x0C flash busy too long), 0 = none; stuck: sector addresses whose
+		// READ record carries the next sector's data every time (the radio's SUMS still has the right CRC), as a cable or
+		// a read path that always drops the same bytes would
+		this.faults = { flip: 0, misplace: [], stuck: [], silentAfterReset: false, romEcho: false, romNak: false, slowCable: 0, badWrite: 0,
 			writeStatus: 0, nandEcc: [], ...faults };
 		this.rand = rng(11);
 		this.state = "off";		// off | rom | booting | firmware | stub | bfloader
@@ -705,6 +707,8 @@ export class FakeC7000 {
 				const k = this.faults.misplace.indexOf(at);
 				if (k >= 0) {
 					this.faults.misplace.splice(k, 1);
+					at += SECTOR;
+				} else if (this.faults.stuck.includes(at)) {
 					at += SECTOR;
 				}
 				if (eccBad(m, at, SECTOR)) return this.reply(0x0D, new Uint8Array(0)), 1;	// and nothing after it

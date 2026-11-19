@@ -130,6 +130,17 @@ test("a sector record that belongs to another sector is caught by the radio's ch
 	assert.ok(s.retried >= 2, "the two sectors were read again");
 });
 
+test("a sector that reads wrong on every try names the memory and whether the radio's CRC is stable", async (t) => {
+	const { r } = await radio("stock", { faults: { stuck: [0x41000] } });
+	t.after(() => r.stop());
+	const s = new Stub(r.stream, { log: quiet });
+	setTimeout(() => r.powerOn(), 50);
+	await s.waitForRom(5000);
+	await s.loadThroughRom(stubs.image, stubs.load);
+	await assert.rejects(s.dump("progmem", 0x40000, 0x50000),
+		(e) => e instanceof StubError && /program memory 0x41000/.test(e.message) && /CRC is stable/.test(e.message));
+});
+
 test("boot ROM load through a cable that echoes what it sends: the echo is dropped and the load goes on", async (t) => {
 	const { r } = await radio("stock", { faults: { romEcho: true } });
 	t.after(() => r.stop());

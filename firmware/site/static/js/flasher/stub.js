@@ -514,6 +514,25 @@ export class Stub {
 		return bad;
 	}
 
+	// A sector that keeps failing its CRC: ask the radio for its own CRC of it twice more, with the line drained
+	// between. A stable CRC means the radio reads the sector the same way every time, so what differs is the bytes that
+	// reached this computer (the cable or the port); a CRC that changes means the flash itself reads differently each
+	// time. The note goes into the error, so a report says which one it was.
+	async whyMismatch(mem, sa) {
+		try {
+			await this.drain(120);
+			const a = (await this.sums(mem, sa, 1))[0];
+			await this.drain(120);
+			const b = (await this.sums(mem, sa, 1))[0];
+			if (a.crc === b.crc) {
+				return " (the radio's own CRC is stable, so the sector reads the same on the radio: the data was corrupted on the way to this computer)";
+			}
+			return " (the radio's own CRC changes between reads: the flash sector reads differently each time)";
+		} catch (e) {
+			return "";
+		}
+	}
+
 	async readFrame(timeout) {
 		const hdr = await this.readExact(6, timeout);
 		if (hdr.length !== 6 || hdr[0] !== 0x02 || hdr[5] !== 0x03) throw new FrameError("no or malformed frame header");
@@ -543,7 +562,7 @@ export class Stub {
 		for (let pass = 0; ; pass++) {
 			const bad = await this.verify(mem, full, lo, () => {}, { ecc });
 			if (!bad.length) break;
-			if (pass >= this.retries) throw new StubError(`0x${bad[0].toString(16)}: the read does not match the radio's checksum after ${pass + 1} tries`);
+			if (pass >= this.retries) throw new StubError(`${m.name} 0x${bad[0].toString(16)}: the read does not match the radio's checksum after ${pass + 1} tries${await this.whyMismatch(mem, bad[0])}`);
 			this.log(`${bad.length} sector(s) read wrong (first 0x${bad[0].toString(16)}), reading them again`);
 			this.retried += bad.length;
 			for (const sa of bad) await this.readSectors(m, full, lo, sa, sa + SECTOR, { compress: false, signal, stats, ecc, onRetry });
