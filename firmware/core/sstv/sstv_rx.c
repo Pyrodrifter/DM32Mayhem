@@ -22,6 +22,11 @@
 #define VIS_BIT_US	30000u
 #define VIS_BITS	8u		// 7 data bits, then even parity
 
+// The tone bins the Goertzel estimator measures, with the 1200 Hz sync and the VIS tones included
+static const float sstv_gfreq[SSTV_GOERTZEL_BINS] = {
+	1100.0f, 1200.0f, 1300.0f, 1500.0f, 1700.0f, 1900.0f, 2100.0f, 2300.0f
+};
+
 // A mode's line, us. Martin and Scottie send Y, Cr, Cb every line; the porch and the separators are 1500 Hz
 typedef struct {
 	uint8_t vis;
@@ -51,15 +56,8 @@ static uint8_t pixel_value(float hz)
 	return (uint8_t)v;
 }
 
-static uint16_t ycbcr(uint8_t y, int8_t cr, int8_t cb)
+static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
 {
-	int yl = y;
-	int r = yl + (cr * 1436) / 1024;
-	int g = yl - (cb * 352) / 1024 - (cr * 731) / 1024;
-	int b = yl + (cb * 1814) / 1024;
-	if (r < 0) r = 0; else if (r > 255) r = 255;
-	if (g < 0) g = 0; else if (g > 255) g = 255;
-	if (b < 0) b = 0; else if (b > 255) b = 255;
 	return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
@@ -87,7 +85,7 @@ static void finish_line(sstv_rx_t *rx)
 {
 	if (rx->pixel != NULL && (rx->have & 0x07) == 0x07) {
 		for (uint16_t x = 0; x < SSTV_LINE_MAX; x++) {
-			rx->pixel(rx->ctx, x, rx->line, ycbcr(rx->y[x], rx->cr[x], rx->cb[x]));
+			rx->pixel(rx->ctx, x, rx->line, rgb565(rx->rr[x], rx->gg[x], rx->bb[x]));
 		}
 	}
 	if (rx->line_cb != NULL) {
@@ -110,6 +108,7 @@ static void vis_done(sstv_rx_t *rx)
 	rx->line = 0;
 	rx->have = 0;
 	rx->state = ST_SYNC;
+	rx->sync_n = 0;
 	rx->sample = 0;
 	if (rx->on_mode != NULL) {
 		rx->on_mode(rx->ctx, t->vis, t->mode, t->w, t->h);
@@ -118,11 +117,48 @@ static void vis_done(sstv_rx_t *rx)
 
 static void feed_one(sstv_rx_t *rx, int16_t sample)
 {
-	// A band-passed, hysteresis zero crossing: the spacing between crossings is half a period. The band pass (about
-	// 700..3200 Hz) and the +/-T Schmitt threshold keep hiss from adding crossings on a real reception.
-	float sv = (float)sample;
-	rx->dc += 0.005f * (sv - rx->dc);
-	float x = sv - rx->dc;
+	// Goertzel tone estimate over about 2 ms (eight bins across the SSTV tones). The PortaPack Mayhem SSTV receiver
+	// uses the same idea, and it is far steadier than counting zero crossings on the radio's 8 kHz FM audio.
+	float sv = (float)sample / 32768.0f;
+	for (int f = 0; f < SSTV_GOERTZEL_BINS; f++) {
+		float q0 = rx->gcoef[f] * rx->gq1[f] - rx->gq2[f] + sv;
+		rx->gq2[f] = rx->gq1[f];
+		rx->gq1[f] = q0;
+	}
+	if (++rx->gcount >= rx->gn) {
+		float mag[SSTV_GOERTZEL_BINS];
+		int mi = 0;
+		for (int f = 0; f < SSTV_GOERTZEL_BINS; f++) {
+			mag[f] = rx->gq1[f] * rx->gq1[f] + rx->gq2[f] * rx->gq2[f] -
+				 rx->gq1[f] * rx->gq2[f] * rx->gcoef[f];
+			rx->gmag[f] = mag[f];
+			rx->gq1[f] = 0;
+			rx->gq2[f] = 0;
+			if (mag[f] > mag[mi]) {
+				mi = f;
+			}
+		}
+		float hz = sstv_gfreq[mi];
+		if (mi > 0 && mag[mi] > 0.0f) {	// interpolate with the neighbours: finer than the bin spacing
+			float r = mag[mi - 1] / mag[mi];
+			if (r > 0.2f) {
+				hz -= (sstv_gfreq[mi] - sstv_gfreq[mi - 1]) * r * 0.5f;
+			}
+		}
+		if (mi < SSTV_GOERTZEL_BINS - 1 && mag[mi] > 0.0f) {
+			float r = mag[mi + 1] / mag[mi];
+			if (r > 0.2f) {
+				hz += (sstv_gfreq[mi + 1] - sstv_gfreq[mi]) * r * 0.5f;
+			}
+		}
+		rx->hz = hz;
+		rx->gcount = 0;
+	}
+	// A fast tone from the band-passed zero crossings: precise edges for the sync and the state machine. The
+	// Goertzel above is steadier for the pixels but lags a block, which made every line start at a different x.
+	float sv2 = (float)sample;
+	rx->dc += 0.005f * (sv2 - rx->dc);
+	float x = sv2 - rx->dc;
 	float y = 0.2915f * x - 0.2915f * rx->bp_x2 - (-0.2225f) * rx->bp_y1 - 0.4169f * rx->bp_y2;
 	rx->bp_x2 = rx->bp_x1;
 	rx->bp_x1 = x;
@@ -148,15 +184,14 @@ static void feed_one(sstv_rx_t *rx, int16_t sample)
 		if (rx->cross_ok) {
 			float spacing = pos - rx->last_cross;
 			if (spacing > 0.4f && spacing < 40.0f) {
-				float hz = (float)rx->rate / (2.0f * spacing);
-				if (hz > 300.0f && hz < 3200.0f) {
+				float f = (float)rx->rate / (2.0f * spacing);
+				if (f > 300.0f && f < 3200.0f) {
 					rx->hz_hist[2] = rx->hz_hist[1];
 					rx->hz_hist[1] = rx->hz_hist[0];
-					rx->hz_hist[0] = hz;
-					// median of three: one noisy crossing no longer moves the tone the state machine sees
+					rx->hz_hist[0] = f;
 					float a = rx->hz_hist[0], b = rx->hz_hist[1], c = rx->hz_hist[2];
 					float lo = a < b ? a : b, hi = a < b ? b : a;
-					rx->hz = lo > c ? lo : (hi < c ? hi : c);
+					rx->hz_fast = lo > c ? lo : (hi < c ? hi : c);	// median of three
 				}
 			}
 		}
@@ -166,10 +201,12 @@ static void feed_one(sstv_rx_t *rx, int16_t sample)
 	rx->prev = y;
 	rx->prev_ok = true;
 	rx->total++;
+
 	rx->samples++;
 	rx->sample++;
 
-	float hz = rx->hz;
+	// The sync/porch/VIS states use the fast edge; the pixel scan uses the steadier Goertzel
+	float hz = rx->hz - rx->freq_offset;
 	uint32_t n = rx->sample;
 
 	switch (rx->state) {
@@ -251,16 +288,42 @@ static void feed_one(sstv_rx_t *rx, int16_t sample)
 		}
 		break;
 	case ST_SYNC:
-		if (hz > 1050.0f && hz < 1350.0f && n >= us_samples(rx, 4000u)) {
-			rx->state = ST_PORCH;
-			rx->sample = 0;
-			rx->t0 = 0;
-			rx->seg = 0;
-			rx->px = 0;
-			rx->have = 0;
-		} else if (n > us_samples(rx, 60000u)) {
-			rx->state = ST_WAIT_VIS;	// no sync: back to looking for a header
-			rx->sample = 0;
+		// Lock on the end of the 1200 Hz sync pulse (the trailing edge), as the Mayhem receiver does: the porch and
+		// the scan then start from a known point. The tone estimate lags a block, so the edge is seen a couple of ms
+		// late; a fixed horizontal offset, not a drift.
+		if (hz > 1050.0f && hz < 1350.0f) {
+			if (rx->sync_n < 0xFFF0u) {
+				rx->sync_n++;
+				rx->sync_sum += rx->hz;
+			}
+		} else {
+			if (rx->sync_n >= us_samples(rx, 1500u)) {
+				float m = rx->sync_sum / (float)rx->sync_n;
+				float off = m - 1200.0f;	// a constant tuning/tone offset shows here
+				if (off > -250.0f && off < 250.0f) {
+					rx->freq_offset = rx->freq_offset * 0.8f + off * 0.2f;
+				}
+				// Start the tone window at the line boundary, so every line is sampled at the same phase
+				rx->gcount = 0;
+				for (int f = 0; f < SSTV_GOERTZEL_BINS; f++) {
+					rx->gq1[f] = 0;
+					rx->gq2[f] = 0;
+				}
+				rx->state = ST_PORCH;
+				rx->sample = 0;
+				rx->t0 = 0;
+				rx->seg = 0;
+				rx->px = 0;
+				rx->have = 0;
+			}
+			rx->sync_n = 0;
+			rx->sync_sum = 0;
+			if (rx->state == ST_SYNC && n > us_samples(rx, 60000u)) {
+				rx->sample = 0;
+				if (rx->forced == SSTV_MODE_NONE) {
+					rx->state = ST_WAIT_VIS;	// no sync: back to looking for a header
+				}
+			}
 		}
 		break;
 	case ST_PORCH: {
@@ -295,14 +358,14 @@ static void feed_one(sstv_rx_t *rx, int16_t sample)
 			}
 			uint8_t v = pixel_value(hz);
 			uint16_t x = rx->px;
-			if (rx->seg == 0) {
-				rx->y[x] = v;
+			if (rx->seg == 0) {		// Martin and Scottie send G, then B, then R
+				rx->gg[x] = v;
 				rx->have |= 0x01;
 			} else if (rx->seg == 1) {
-				rx->cr[x] = (int8_t)((int)v - 128);
+				rx->bb[x] = v;
 				rx->have |= 0x02;
 			} else {
-				rx->cb[x] = (int8_t)((int)v - 128);
+				rx->rr[x] = v;
 				rx->have |= 0x04;
 			}
 			rx->px++;
@@ -327,14 +390,25 @@ static void feed_one(sstv_rx_t *rx, int16_t sample)
 				rx->line++;
 				if (rx->line >= rx->lines) {
 					rx->frames++;
-					if (rx->on_mode != NULL) {
-						rx->on_mode(rx->ctx, 0, SSTV_MODE_NONE, 0, 0);
+					if (rx->forced != SSTV_MODE_NONE) {
+						const sstv_timing_t *t = timing_for_mode(rx->forced);
+						rx->line = 0;
+						if (t != NULL && rx->on_mode != NULL) {
+							rx->on_mode(rx->ctx, t->vis, rx->forced, t->w, t->h);	// a clear image for the next
+						}
+						rx->state = ST_SYNC;
+						rx->sync_n = 0;
+					} else {
+						if (rx->on_mode != NULL) {
+							rx->on_mode(rx->ctx, 0, SSTV_MODE_NONE, 0, 0);
+						}
+						rx->mode = SSTV_MODE_NONE;
+						rx->state = ST_WAIT_VIS;
 					}
-					rx->mode = SSTV_MODE_NONE;
-					rx->state = ST_WAIT_VIS;
 					rx->sample = 0;
 				} else {
 					rx->state = ST_SYNC;
+					rx->sync_n = 0;
 					rx->sample = 0;
 				}
 			} else {
@@ -365,12 +439,49 @@ bool sstv_rx_begin(sstv_rx_t *rx, uint32_t rate, sstv_pixel_fn pixel, sstv_line_
 	rx->on_mode = on_mode;
 	rx->ctx = ctx;
 	rx->state = ST_WAIT_VIS;
+	for (int f = 0; f < SSTV_GOERTZEL_BINS; f++) {
+		rx->gcoef[f] = 2.0f * (float)cos(2.0 * 3.141592653589793 * (double)sstv_gfreq[f] / (double)rate);
+	}
+	rx->gn = (uint8_t)(rate / 250u);	// about 4 ms: steadier on noisy FM audio
+	if (rx->gn < 8) {
+		rx->gn = 8;
+	} else if (rx->gn > 64) {
+		rx->gn = 64;
+	}
 	return true;
 }
 
 void sstv_rx_reset(sstv_rx_t *rx)
 {
 	sstv_rx_begin(rx, rx->rate, rx->pixel, rx->line_cb, rx->on_mode, rx->ctx);
+}
+
+void sstv_rx_force_mode(sstv_rx_t *rx, uint8_t mode)
+{
+	rx->forced = mode;
+	rx->sample = 0;
+	rx->line = 0;
+	rx->have = 0;
+	rx->seg = 0;
+	rx->px = 0;
+	if (mode == SSTV_MODE_NONE) {
+		rx->mode = SSTV_MODE_NONE;
+		rx->state = ST_WAIT_VIS;
+		return;
+	}
+	const sstv_timing_t *t = timing_for_mode(mode);
+	if (t == NULL) {
+		rx->mode = SSTV_MODE_NONE;
+		rx->state = ST_WAIT_VIS;
+		return;
+	}
+	rx->mode = mode;
+	rx->lines = t->h;
+	rx->state = ST_SYNC;
+	rx->sync_n = 0;
+	if (rx->on_mode != NULL) {
+		rx->on_mode(rx->ctx, t->vis, mode, t->w, t->h);
+	}
 }
 
 void sstv_rx_feed(sstv_rx_t *rx, const int16_t *samples, uint32_t n)

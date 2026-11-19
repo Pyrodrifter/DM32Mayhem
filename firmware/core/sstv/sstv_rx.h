@@ -12,6 +12,7 @@
 #define SSTV_LINE_MAX		320
 #define SSTV_LINES_MAX		256
 #define SSTV_MODE_NAME		8
+#define SSTV_GOERTZEL_BINS	8
 
 // The modes the decoder follows (VIS code in brackets). Martin M1 [44], M2 [40]; Scottie S1 [60], S2 [56];
 // Robot 36 [8], 72 [12]. The image is 320 wide except Robot (320 too); the height is what the mode sends.
@@ -53,6 +54,8 @@ typedef struct {
 	// The state machine
 	uint8_t state;
 	uint8_t mode;
+	uint8_t forced;			// a mode chosen in the UI: skip VIS and lock on the line sync
+	uint16_t sync_n;		// samples of the line sync seen (its end starts the porch)
 	uint16_t lines;			// the mode's line count
 	uint16_t line;			// the line being received
 	uint32_t sample;		// samples since the state started
@@ -61,12 +64,18 @@ typedef struct {
 	uint8_t vis_bits, vis_count, vis_parity;
 	uint16_t bit_ones;	// samples of this bit above 1200 Hz (integrate and dump)
 	bool armed;			// the second leader is confirmed: the next tone drop starts the bits
-	// The line: which of Y/Cr/Cb (seg), the pixel in it
+	// The line: which of G/B/R (seg), the pixel in it. Martin and Scottie send G, B, R, not Y/Cr/Cb
 	uint8_t seg;
 	uint16_t px;
-	uint8_t y[SSTV_LINE_MAX];
-	int8_t cr[SSTV_LINE_MAX], cb[SSTV_LINE_MAX];
-	uint8_t have;			// which of Y, Cr, Cb this line has: bit 0 Y, 1 Cr, 2 Cb
+	uint8_t gg[SSTV_LINE_MAX], bb[SSTV_LINE_MAX], rr[SSTV_LINE_MAX];
+	uint8_t have;			// which of G, B, R this line has: bit 0 G, 1 B, 2 R
+	// Goertzel tone estimate over about a 2 ms window (the window PortaPack Mayhem uses), eight tone bins
+	float gq1[SSTV_GOERTZEL_BINS], gq2[SSTV_GOERTZEL_BINS], gcoef[SSTV_GOERTZEL_BINS];
+	uint8_t gn, gcount;
+	float hz_fast;			// zero-crossing tone: a fast edge for the sync and the state machine
+	float freq_offset;		// the sync tone offset from 1200 Hz, subtracted from every tone
+	float sync_sum;
+	float gmag[SSTV_GOERTZEL_BINS];	// the last block magnitudes, for the diagnostic log
 	uint32_t samples;
 	uint32_t frames;
 } sstv_rx_t;
@@ -76,6 +85,9 @@ bool sstv_rx_begin(sstv_rx_t *rx, uint32_t rate, sstv_pixel_fn pixel, sstv_line_
 		   void *ctx);
 // Back to waiting for a VIS header
 void sstv_rx_reset(sstv_rx_t *rx);
+// Decode a chosen mode without the VIS header (SSTV_MODE_NONE goes back to VIS auto-detect). A forced mode locks on the
+// 1200 Hz line sync and decodes, the way the PortaPack Mayhem SSTV receiver does.
+void sstv_rx_force_mode(sstv_rx_t *rx, uint8_t mode);
 // Feed received FM discriminator audio, signed 16-bit at rx->rate
 void sstv_rx_feed(sstv_rx_t *rx, const int16_t *samples, uint32_t n);
 

@@ -50,6 +50,8 @@ static void vis(uint8_t code)
 static uint8_t val_ramp(uint16_t x) { return (uint8_t)(x * 255u / 319u); }
 static uint8_t val_128(uint16_t x) { (void)x; return 128; }
 static uint8_t val_160(uint16_t x) { (void)x; return 160; }
+static uint8_t val_0(uint16_t x) { (void)x; return 0; }
+static uint8_t val_200(uint16_t x) { (void)x; return 200; }
 static void scan_line(uint32_t scan_us, uint8_t (*val)(uint16_t))
 {
 	uint32_t total = (uint32_t)((uint64_t)RATE * scan_us / 1000000u);
@@ -93,15 +95,15 @@ int main(void)
 	int fails = 0;
 	sstv_rx_t rx;
 	vis(44);
-	// Two Martin M1 lines: sync, porch, Y, sep, Cr, sep, Cb, sep
-	for (int l = 0; l < 2; l++) {
+	// Two Martin M1 lines: sync, porch, G, sep, B, sep, R, sep (Martin sends G, B, R)
+	for (int l = 0; l < 3; l++) {
 		us(1200, 4862);
 		us(1500, 572);
-		scan_line(146432u, l == 0 ? val_ramp : val_128);
+		scan_line(146432u, l == 0 ? val_ramp : val_0);		// G
 		us(1500, 572);
-		scan_line(146432u, l == 0 ? val_128 : val_160);
+		scan_line(146432u, val_0);				// B
 		us(1500, 572);
-		scan_line(146432u, val_128);
+		scan_line(146432u, l == 0 ? val_0 : val_200);		// R
 		us(1500, 572);
 	}
 
@@ -115,14 +117,18 @@ int main(void)
 		sstv_rx_feed(&rx, &sig[i], n);
 	}
 
+	printf("state=%u line=%u lines=%u sync_n=%u sample=%u hz=%.0f\n", rx.state, rx.line, rx.lines, rx.sync_n, rx.sample, rx.hz);
+	printf("got0[150]=(%u,%u,%u) got1[100]=(%u,%u,%u)\n",
+	       got[0][150][0], got[0][150][1], got[0][150][2],
+	       got[1][100][0], got[1][100][1], got[1][100][2]);
 	CHECK(mode_seen == SSTV_MODE_MARTIN_M1);
 	CHECK(lines_seen >= 2);
-	// Line 0, x=0 is black (Y=0, Cr=128, Cb=128); x=319 near white
+	// Line 0: G ramp, B=R=0 -> black at the left, green at the right
 	CHECK(got[0][8][0] <= 48 && got[0][8][1] <= 48 && got[0][8][2] <= 48);
-	CHECK(got[0][150][0] > 80 && got[0][150][0] < 200);
-	CHECK(got[0][319][0] > 200 && got[0][319][1] > 200 && got[0][319][2] > 200);
-	// Line 1: Y=128, Cr=160, Cb=128 -> a red-ish gray
-	CHECK(got[1][100][0] > got[1][100][2]);
+	CHECK(got[0][150][1] > 80 && got[0][150][1] < 200);
+	CHECK(got[0][319][1] > 200 && got[0][319][0] <= 48 && got[0][319][2] <= 48);
+	// Line 1: G=B=0, R=200 -> red
+	CHECK(got[1][100][0] > 150 && got[1][100][1] < 80 && got[1][100][2] < 80);
 
 	printf("%s: mode %d lines %d (samples %u frames %u)\n", fails ? "FAIL" : "PASS", mode_seen, lines_seen,
 	       rx.samples, rx.frames);

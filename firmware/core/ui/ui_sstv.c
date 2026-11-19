@@ -11,9 +11,12 @@
 #include "board.h"
 #include "radio/radio.h"
 #include "sstv/sstv_rx.h"
+#include "debuglink/dlog.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define SSTV_HZ		144500000u	// the 2 m SSTV calling frequency; the decoder takes any FM audio
-#define SSTV_IMG_TOP	44
+#define SSTV_IMG_TOP	66
 #define SSTV_IMG_W	240
 #define SSTV_IMG_H	192
 
@@ -24,6 +27,19 @@ static uint8_t mode, lines_done;
 static uint16_t lines_total;
 static bool dirty, needs_clear = true;
 static const char *sstv_err;
+static uint8_t forced = SSTV_MODE_MARTIN_M1;	// the mode chosen in the UI (SSTV_MODE_NONE = VIS auto)
+static const uint8_t mode_order[] = { SSTV_MODE_NONE, SSTV_MODE_MARTIN_M1, SSTV_MODE_MARTIN_M2,
+				      SSTV_MODE_SCOTTIE_S1, SSTV_MODE_SCOTTIE_S2 };
+static bool editing;			// the frequency editor owns the keys while set
+static uint8_t row;			// the selected line: 0 Freq, 1 Mode
+static bool mode_edit;			// the mode line is being changed
+static uint8_t mode_sel;
+static char ed[UI_ENTRY_MAX + 1];
+static uint8_t ed_len;
+static uint32_t dbg_ms;		// the 1 Hz diagnostic log
+static uint32_t draw_ms;		// the last screen refresh (throttled: a flush is slow)
+static int32_t dbg_peak;
+
 
 static const char *mode_name(uint8_t m)
 {
@@ -73,21 +89,18 @@ static void sstv_stop(void)
 	}
 }
 
-// Drain the receive ring into the decoder (a few reads a tick, as RTTY does)
-static bool sstv_pump(void)
+// Drain the receive ring into the decoder (UI tick)
+static void sstv_pump(void)
 {
 	if (!active || board.afsk == NULL || board.afsk->rx_read == NULL) {
-		return false;
+		return;
 	}
 	int16_t buf[160];
 	uint16_t n;
-	for (int budget = 8; budget > 0 && (n = board.afsk->rx_read(buf, (uint16_t)(sizeof buf / sizeof buf[0]))) != 0;
-	     budget--) {
+	for (int budget = 8; budget > 0 &&
+	     (n = board.afsk->rx_read(buf, (uint16_t)(sizeof buf / sizeof buf[0]))) != 0; budget--) {
 		sstv_rx_feed(&rx, buf, n);
 	}
-	bool redraw = dirty;
-	dirty = false;
-	return redraw;
 }
 
 // Once the radio task reports VFO FM (the app queued it on entry), open the receive audio. Opening it before the
@@ -104,6 +117,7 @@ static void sstv_open(void)
 	}
 	sstv_rx_begin(&rx, board.afsk->rx_rate_hz != 0 ? board.afsk->rx_rate_hz : 8000u,
 		      on_pixel, on_line, on_mode, NULL);
+	sstv_rx_force_mode(&rx, forced);
 	active = true;
 	starting = false;
 }
@@ -130,7 +144,19 @@ static bool sstv_tick(uint32_t now)
 		ui_dirty();
 		return true;
 	}
-	return sstv_pump();
+	sstv_pump();
+	if (now - dbg_ms >= 1000u) {
+		dbg_ms = now;
+		dlog("sstv n=%u st=%u hz=%d off=%d mode=%u", (unsigned)rx.samples, rx.state, (int)rx.hz,
+		     (int)rx.freq_offset, mode);
+		dbg_peak = 0;
+	}
+	if ((dirty && now - draw_ms >= 150u) || now - draw_ms >= 1000u) {
+		dirty = false;
+		draw_ms = now;
+		return true;
+	}
+	return false;
 }
 
 static void sstv_draw(void)
@@ -142,14 +168,14 @@ static void sstv_draw(void)
 	}
 	gfx_fill(0, 0, gfx_width(), SSTV_IMG_TOP, ui_col.bg);
 	gfx_fill(0, SSTV_IMG_TOP + SSTV_IMG_H, gfx_width(), gfx_height() - (SSTV_IMG_TOP + SSTV_IMG_H), ui_col.bg);
+
+	// Header: what it is doing (a line progress, Tuning or Waiting)
 	char sub[48];
 	sbuf_t b;
 	sb_init(&b, sub, sizeof sub);
 	if (sstv_err != NULL) {
 		sb_str(&b, sstv_err);
 	} else if (mode != SSTV_MODE_NONE) {
-		sb_str(&b, mode_name(mode));
-		sb_str(&b, "  ");
 		sb_u32(&b, lines_done, 1);
 		sb_chr(&b, '/');
 		sb_u32(&b, lines_total, 1);
@@ -157,36 +183,131 @@ static void sstv_draw(void)
 		sb_str(&b, TR("Tuning"));
 	} else {
 		sb_str(&b, TR("Waiting"));
-		sb_str(&b, " ");
-		sb_u32(&b, rx.samples / 1000u, 1);
-		sb_str(&b, "k st");
-		sb_u32(&b, rx.state, 1);
-		sb_str(&b, " ");
-		sb_u32(&b, rx.vis_bits, 1);
-		sb_str(&b, "/");
-		sb_u32(&b, rx.vis_count, 1);
-		sb_str(&b, " ");
-		sb_i32(&b, (int)rx.hz);
 	}
-	ui_draw_top(ui_view(), &ui_st, "SSTV", sub);
-	ui_draw_bottom(&ui_st, TR("Back stop"));
+	int y = ui_draw_top(ui_view(), &ui_st, "SSTV", sub) + 1;
+
+	// The frequency and the chosen mode, each on its own line; the selected one is highlighted
+	const font_t *f = ui_layout.small;
+	char line[40];
+	sbuf_t lb;
+	bool sel_freq = !mode_edit && row == 0;
+	sb_init(&lb, line, sizeof line);
+	sb_str(&lb, "Freq ");
+	if (editing) {
+		sb_str(&lb, ed_len != 0 ? ed : TR("type digits"));
+	} else {
+		sb_freq(&lb, hz);
+	}
+	gfx_text(f, 0, y, line, sel_freq || editing ? ui_col.rx : ui_col.fg);
+	bool sel_mode = mode_edit || row != 0;
+	sb_init(&lb, line, sizeof line);
+	sb_str(&lb, "Mode ");
+	if (mode_edit) {
+		sb_str(&lb, mode_sel == SSTV_MODE_NONE ? "Auto" : mode_name(mode_sel));
+	} else {
+		sb_str(&lb, forced == SSTV_MODE_NONE ? "Auto" : mode_name(forced));
+	}
+	gfx_text(f, 0, y + f->h + 1, line, sel_mode ? ui_col.rx : ui_col.fg);
+
+	if (editing) {
+		ui_draw_bottom(&ui_st, TR("OK set  Back"));
+	} else if (mode_edit) {
+		ui_draw_bottom(&ui_st, TR("Up Down  OK set  Back"));
+	} else {
+		ui_draw_bottom(&ui_st, TR("Up Down  OK edit  Back"));
+	}
 	ui_draw_banner(&ui_st);
+}
+
+static void sstv_set_hz(uint32_t f)
+{
+	hz = f;
+	radio_req_vfo_set(hz);		// retune now; the decoder keeps listening to the FM audio
+	ui_dirty();
 }
 
 static bool sstv_key(const input_event_t *ev)
 {
-	if (ev->gesture != GESTURE_PRESS && ev->gesture != GESTURE_REPEAT) {
+	bool press = ev->gesture == GESTURE_PRESS;
+	bool repeat = ev->gesture == GESTURE_REPEAT;
+	int d = ev->action >= ACT_DIGIT_0 && ev->action <= ACT_DIGIT_9 ? ev->action - ACT_DIGIT_0 : -1;
+
+	// Typing a frequency: digits build it, Back deletes (and leaves once empty), OK applies it
+	if (editing) {
+		if (d >= 0 && (press || repeat)) {
+			(void)ui_freq_entry_digit(ed, &ed_len, (char)('0' + d));
+			ui_dirty();
+			return true;
+		}
+		if (ev->action == ACT_BACK && press) {
+			if (ed_len != 0) {
+				ed[--ed_len] = '\0';
+			} else {
+				editing = false;
+			}
+			ui_dirty();
+			return true;
+		}
+		if (ev->action == ACT_SELECT && press) {
+			uint32_t f = ui_freq_entry_hz(ed, ed_len);
+			if (f != 0) {
+				editing = false;
+				sstv_set_hz(f);
+			}
+			ui_dirty();
+			return true;
+		}
+		return true;
+	}
+
+	// Changing the mode: Up/Down cycles the choices, OK applies, Back cancels
+	if (mode_edit) {
+		if ((ev->action == ACT_NAV_UP || ev->action == ACT_NAV_DOWN) && (press || repeat)) {
+			const int n = (int)(sizeof mode_order / sizeof mode_order[0]);
+			int i = 0;
+			while (i < n && mode_order[i] != mode_sel) {
+				i++;
+			}
+			i = (i + (ev->action == ACT_NAV_UP ? 1 : n - 1)) % n;
+			mode_sel = mode_order[i];
+			ui_dirty();
+			return true;
+		}
+		if (ev->action == ACT_SELECT && press) {
+			forced = mode_sel;
+			mode_edit = false;
+			if (active) {
+				sstv_rx_force_mode(&rx, forced);
+			}
+			ui_dirty();
+			return true;
+		}
+		if (ev->action == ACT_BACK && press) {
+			mode_edit = false;
+			ui_dirty();
+			return true;
+		}
+		return true;
+	}
+
+	if (!press && !repeat) {
 		return false;
 	}
 	if (ev->action == ACT_NAV_UP || ev->action == ACT_NAV_DOWN) {
-		int dir = ev->action == ACT_NAV_UP ? 1 : -1;
-		if (hz >= 144000000u && hz <= 145000000u) {
-			hz = (uint32_t)((int32_t)hz + dir * 25000);
-			if (active) {
-				radio_req_vfo_set(hz);
-			}
-			ui_dirty();
+		row ^= 1u;		// Fref <-> Mode
+		ui_dirty();
+		return true;
+	}
+	if (ev->action == ACT_SELECT && press) {
+		if (row == 0) {
+			editing = true;
+			ed_len = 0;
+			ed[0] = '\0';
+		} else {
+			mode_edit = true;
+			mode_sel = forced;
 		}
+		ui_dirty();
 		return true;
 	}
 	return false;
@@ -202,6 +323,15 @@ static void sstv_enter(void)
 	mode = SSTV_MODE_NONE;
 	lines_done = 0;
 	lines_total = 0;
+	editing = false;
+	mode_edit = false;
+	row = 0;
+	ed_len = 0;
+	ed[0] = '\0';
+	dbg_ms = 0;
+	draw_ms = 0;
+	dbg_peak = 0;
+	dirty = false;
 	radio_req_vfo(true);
 	radio_req_vfo_set(hz);
 	radio_req_mode(RADIO_MODE_FM);
@@ -212,6 +342,7 @@ static void sstv_leave(void)
 {
 	sstv_stop();
 	starting = false;
+	editing = false;
 }
 
 const ui_scr_def_t ui_sstv_screen = {
