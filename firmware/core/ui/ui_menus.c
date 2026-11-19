@@ -8,6 +8,7 @@
 #include <math.h>
 #include "board.h"
 #include "ui_nav.h"
+#include "debuglink/dlog.h"
 #include "ui_svc.h"
 #include "fmt.h"
 #include "codeplug/codeplug.h"
@@ -6045,7 +6046,7 @@ typedef struct {
 	uint8_t scr;
 } menu_tx_tile_t;
 
-#if CONFIG_SAME_TX || CONFIG_OOK_TX || CONFIG_MDC_TX || CONFIG_P25CC_TX || CONFIG_APRS_TX || CONFIG_RTTY_TX
+#if CONFIG_SAME_TX || CONFIG_OOK_TX || CONFIG_MDC_TX || CONFIG_P25CC_TX || CONFIG_APRS_TX || CONFIG_RTTY_TX || CONFIG_POCSAG
 #define MENU_HAVE_TX	1
 static const menu_tx_tile_t menu_tx_tiles[] = {
 #if CONFIG_SAME_TX
@@ -6060,6 +6061,9 @@ static const menu_tx_tile_t menu_tx_tiles[] = {
 #endif
 #if CONFIG_P25CC_TX
 	{ "P25", icon_sync, SCR_P25CC_TX },
+#endif
+#if CONFIG_POCSAG
+	{ "POCSAG TX", icon_burst, SCR_POCSAG_TX },
 #endif
 #if CONFIG_APRS_TX
 	{ "APRS", icon_aprs, SCR_APRS_TX },
@@ -6098,7 +6102,7 @@ static const menu_tx_tile_t menu_trx_tiles[] = {
 #define MENU_TRX_TILES	(sizeof(menu_trx_tiles) / sizeof(menu_trx_tiles[0]))
 #endif
 
-// Experimental: apps that are in the tree but not ready for the main RX/TX grids (ACARS, POCSAG, SSTV today)
+// Experimental: apps that are in the tree but not ready for the main RX/TX grids (ACARS, POCSAG RX, SSTV today)
 #if CONFIG_ACARS || CONFIG_POCSAG || CONFIG_SSTV_RX
 static const menu_tx_tile_t menu_exp_tiles[] = {
 #if CONFIG_ACARS
@@ -6106,7 +6110,6 @@ static const menu_tx_tile_t menu_exp_tiles[] = {
 #endif
 #if CONFIG_POCSAG
 	{ "POCSAG RX", icon_pulse, SCR_POCSAG },
-	{ "POCSAG TX", icon_burst, SCR_POCSAG_TX },
 #endif
 #if CONFIG_SSTV_RX
 	{ "SSTV", icon_sstv, SCR_SSTV_RX },
@@ -9384,10 +9387,16 @@ static const ui_scr_def_t acars_ch_screen = {
 // ======================= POCSAG (CONFIG_POCSAG): an RX app and a TX app =======================
 // RX (SCR_POCSAG): tune the VFO to the pager channel, start the FM receive audio and decode pages in the UI tick.
 // TX (SCR_POCSAG_TX): build a page and queue it through the APRS RF service; board.pocsag_tx sends baseband 2FSK.
-// The protocol core is in core/pocsag. Defaults: 439.9875 MHz, capcode 1139775, 1200 baud, alphanumeric.
+// The protocol core is in core/pocsag. Defaults: 439.9875 MHz, capcode 1139775, 1200 baud, alphanumeric, function 0.
 
 static pocsag_rx_t pocsag_rx;
 static bool pocsag_active;
+static int32_t prx_peak;
+static uint32_t prx_dbg_ms;
+// Debug: the last 256 ms of received audio, read over the debug link to test the decoder offline
+int16_t pocsag_capture[4096];
+volatile uint32_t pocsag_capture_w;
+volatile uint8_t pocsag_capture_hold;
 static bool pocsag_new;
 static uint32_t pocsag_rx_hz = 439987500u;
 static uint8_t pocsag_rx_baud_idx;		// 0 1200, 1 512, 2 2400, 3 Auto
@@ -9473,7 +9482,31 @@ static bool pocsag_rx_tick(uint32_t now)
 	// kept the task from feeding the watchdog when the audio outpaced it
 	for (int budget = 8; budget > 0 && (n = board.afsk->rx_read(buf, (uint16_t)(sizeof buf / sizeof buf[0]))) != 0;
 	     budget--) {
+		for (uint16_t k = 0; k < n && !pocsag_capture_hold; k++) {
+			int32_t a = buf[k] < 0 ? -buf[k] : buf[k];
+			if (a > prx_peak) {
+				prx_peak = a;
+			}
+			// Freeze the first 512 ms from the page onset: the preamble, the sync and the first codewords
+			if (pocsag_capture_w > 0 || a > 4000) {
+				pocsag_capture[pocsag_capture_w++] = buf[k];
+				if (pocsag_capture_w >= 4096u) {
+					pocsag_capture_hold = 1;
+				}
+			}
+		}
 		pocsag_rx_feed(&pocsag_rx, buf, n);
+	}
+	if (now - prx_dbg_ms >= 1000u) {
+		prx_dbg_ms = now;
+		uint32_t sy = 0, w = 0;
+		for (uint8_t k = 0; k < pocsag_rx.n; k++) {
+			sy += pocsag_rx.d[k].syncs;
+			w += pocsag_rx.d[k].words;
+		}
+		dlog("pocsag: n=%u sy=%u w=%u pk=%d sh=%08x syn=%u", (unsigned)pocsag_rx.samples, (unsigned)sy,
+		     (unsigned)w, (int)prx_peak, (unsigned)pocsag_rx.d[0].shift, pocsag_rx.d[0].synced);
+		prx_peak = 0;
 	}
 	bool redraw = pocsag_new;
 	pocsag_new = false;
@@ -9652,7 +9685,7 @@ static const ui_scr_def_t pocsag_rx_screen = {
 static uint32_t pocsag_tx_hz = 439987500u;
 static uint8_t pocsag_tx_baud_idx;		// 0 1200, 1 512, 2 2400
 static uint32_t pocsag_cap = 1139775u;		// the default pager
-static uint8_t pocsag_func = 3;
+static uint8_t pocsag_func = 0;
 static bool pocsag_alpha = true;
 static uint8_t pocsag_repeat = 1;
 static bool pocsag_invert;
@@ -9809,8 +9842,7 @@ static void pocsag_tx_select(uint16_t i, bool hold)
 		pocsag_func = (uint8_t)((pocsag_func + 1u) & 3u);
 		break;
 	case PTX_ROW_TYPE:
-		pocsag_alpha = !pocsag_alpha;
-		pocsag_func = pocsag_alpha ? 3 : 0;
+		pocsag_alpha = !pocsag_alpha;	// the encoding only: the function is the pager's own sub-address
 		break;
 	case PTX_ROW_MSG:
 		ui_text_open_title(pocsag_text, POCSAG_MAX_TEXT, "POCSAG message");

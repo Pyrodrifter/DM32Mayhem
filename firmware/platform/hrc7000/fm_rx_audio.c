@@ -13,7 +13,7 @@
 #include "FreeRTOS.h"
 #include "debuglink/dlog.h"
 
-#define RING_HALVES	4u
+#define RING_HALVES	8u
 #define RING		(RING_HALVES * HRC7000_FM_RX_SAMPLES)	// samples, a power of two
 
 static hrc7000_t *modem;

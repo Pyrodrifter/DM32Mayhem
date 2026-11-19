@@ -15,8 +15,9 @@
 #define POCSAG_BAUD_1200	1200u
 #define POCSAG_BAUD_2400	2400u
 
-// One page to send. capcode is 21 bits (the address is capcode >> 3, the frame capcode & 7); func 0 numeric,
-// 3 alphanumeric for most pagers. repeat is 1..4 pages. invert flips the data polarity.
+// One page to send. capcode is 21 bits (the address is capcode >> 3, the frame capcode & 7). func is the pager's
+// sub-address, independent of alpha/numeric; most pagers are programmed for one function (0 is the common default).
+// repeat is 1..4 pages. invert flips the data polarity.
 typedef struct {
 	uint32_t capcode;
 	uint8_t func;
