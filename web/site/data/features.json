@@ -1091,6 +1091,18 @@
       }
     },
     {
+      "name": "SIGGEN",
+      "help": "Signal generator: tone, sweep, two-tone and noise through the FM transmitter (core/siggen, the TX grid)",
+      "default": "n",
+      "needs": {
+        "all": [
+          "FM",
+          "APRS"
+        ],
+        "any": []
+      }
+    },
+    {
       "name": "BEEP",
       "help": "beeps and alert tones as PCM through the speaker (needs the board's PCM audio, which some radios have only with DMR)",
       "default": "y",
