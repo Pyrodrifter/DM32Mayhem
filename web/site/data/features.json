@@ -1079,6 +1079,18 @@
       }
     },
     {
+      "name": "SSTV_TX",
+      "help": "SSTV transmit: a picture from flash sent as Martin M1/M2 audio through the FM transmitter (core/sstv/sstv_tx.c)",
+      "default": "n",
+      "needs": {
+        "all": [
+          "FM",
+          "APRS"
+        ],
+        "any": []
+      }
+    },
+    {
       "name": "BEEP",
       "help": "beeps and alert tones as PCM through the speaker (needs the board's PCM audio, which some radios have only with DMR)",
       "default": "y",
