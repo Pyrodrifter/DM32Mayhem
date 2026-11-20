@@ -48,6 +48,7 @@ typedef enum {
 	SCR_SSTV_RX,
 	SCR_SSTV_TX,			// the SSTV picture transmitter (CONFIG_SSTV_TX, core/sstv)
 	SCR_SSTV_PREVIEW,		// the SSTV TX image preview
+	SCR_SIGGEN,			// the signal generator (CONFIG_SIGGEN, core/siggen)
 	SCR_CTCSS_RX,			// the CTCSS tone identifier (CONFIG_CTCSS_RX, core/ctcss)			// the SSTV picture receiver (CONFIG_SSTV_RX, core/sstv)
 	SCR_ACARS,			// the ACARS receiver (CONFIG_ACARS, core/acars)
 	SCR_ACARS_MSGS,			// the ACARS messages, full screen

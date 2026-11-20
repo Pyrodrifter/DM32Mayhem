@@ -76,6 +76,9 @@ extern const ui_scr_def_t ui_sstv_screen;	// ui_sstv.c
 #if CONFIG_SSTV_TX
 extern const ui_scr_def_t ui_sstv_tx_screen, ui_sstv_preview_screen;	// ui_sstv_tx.c
 #endif
+#if CONFIG_SIGGEN
+extern const ui_scr_def_t ui_siggen_screen;	// ui_siggen.c
+#endif
 #if CONFIG_DUAL_WATCH
 extern const ui_scr_def_t ui_dual_screen, ui_dual_pick_screen, ui_dual_zone_screen;	// ui_dual.c
 #endif
@@ -6049,7 +6052,7 @@ typedef struct {
 	uint8_t scr;
 } menu_tx_tile_t;
 
-#if CONFIG_SAME_TX || CONFIG_OOK_TX || CONFIG_MDC_TX || CONFIG_P25CC_TX || CONFIG_APRS_TX || CONFIG_RTTY_TX || CONFIG_POCSAG || CONFIG_SSTV_TX
+#if CONFIG_SAME_TX || CONFIG_OOK_TX || CONFIG_MDC_TX || CONFIG_P25CC_TX || CONFIG_APRS_TX || CONFIG_RTTY_TX || CONFIG_POCSAG || CONFIG_SSTV_TX || CONFIG_SIGGEN
 #define MENU_HAVE_TX	1
 static const menu_tx_tile_t menu_tx_tiles[] = {
 #if CONFIG_SAME_TX
@@ -6076,6 +6079,9 @@ static const menu_tx_tile_t menu_tx_tiles[] = {
 #endif
 #if CONFIG_SSTV_TX
 	{ "SSTV TX", icon_sstv, SCR_SSTV_TX },
+#endif
+#if CONFIG_SIGGEN
+	{ "Signal", icon_wave, SCR_SIGGEN },
 #endif
 };
 #define MENU_TX_TILES	(sizeof(menu_tx_tiles) / sizeof(menu_tx_tiles[0]))
@@ -10708,6 +10714,9 @@ const ui_scr_def_t *const ui_scr[SCR_COUNT] = {
 #if CONFIG_SSTV_TX
 	[SCR_SSTV_TX] = &ui_sstv_tx_screen,
 	[SCR_SSTV_PREVIEW] = &ui_sstv_preview_screen,
+#endif
+#if CONFIG_SIGGEN
+	[SCR_SIGGEN] = &ui_siggen_screen,
 #endif
 #if CONFIG_CRASH_SCREEN
 	[SCR_CRASH] = &crash_screen,

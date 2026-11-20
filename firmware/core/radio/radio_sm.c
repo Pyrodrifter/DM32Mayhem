@@ -72,9 +72,6 @@ static void cw_cancel(radio_sm_t *sm);
 #endif
 #if CONFIG_APRS
 #include "aprs/afsk.h"			// AFSK_BAUD, the tones
-#if CONFIG_SSTV_TX
-#include "sstv/sstv_tx.h"
-#endif
 #endif
 
 // The radio's own DMR ID when the codeplug's general settings hold none (build value; 0 = refuse DMR transmit)
@@ -3439,17 +3436,13 @@ static void aprs_rf_service(radio_sm_t *sm, const radio_status_t *st, uint32_t n
 				aprs_rf_end(sm, APRS_RF_NO_AFSK, now_ms);
 				return;
 			}
-		} else if (sm->aprs_job.sstv) {
-#if CONFIG_SSTV_TX
+		} else if (sm->aprs_job.pcm) {
 			if (board.afsk == NULL || board.afsk->tx_pcm_start == NULL ||
-					!board.afsk->tx_pcm_start(sstv_tx_read, NULL, sm->aprs_job.level)) {
+					!board.afsk->tx_pcm_start(sm->aprs_job.pcm_fill, sm->aprs_job.pcm_ctx,
+								  sm->aprs_job.level)) {
 				aprs_rf_end(sm, APRS_RF_NO_AFSK, now_ms);
 				return;
 			}
-#else
-			aprs_rf_end(sm, APRS_RF_NO_AFSK, now_ms);
-			return;
-#endif
 		} else if (sm->aprs_job.p25) {
 			if (board.p25_tx == NULL || !board.p25_tx->start(sm->aprs_job.tones, sm->aprs_job.nbits)) {
 				aprs_rf_end(sm, APRS_RF_NO_AFSK, now_ms);

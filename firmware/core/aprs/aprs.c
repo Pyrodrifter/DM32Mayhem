@@ -101,7 +101,9 @@ static struct {
 		bool ook;
 		bool p25;
 		bool pocsag;
-		bool sstv;
+		bool pcm;
+		size_t (*pcm_fill)(void *ctx, int16_t *out, size_t max);
+		void *pcm_ctx;
 		bool invert;
 		uint32_t hz;
 		bool narrow;
@@ -1298,7 +1300,9 @@ bool aprs_rf_take(aprs_rf_job_t *job, uint32_t now_ms)
 		job->ook = a.raw.ook;
 		job->p25 = a.raw.p25;
 		job->pocsag = a.raw.pocsag;
-		job->sstv = a.raw.sstv;
+		job->pcm = a.raw.pcm;
+		job->pcm_fill = a.raw.pcm_fill;
+		job->pcm_ctx = a.raw.pcm_ctx;
 		job->invert = a.raw.invert;
 		job->bit_us = a.raw.bit_us;
 		job->repeat = a.raw.repeat;
@@ -1356,7 +1360,9 @@ bool aprs_rf_take(aprs_rf_job_t *job, uint32_t now_ms)
 	job->ook = false;
 	job->p25 = false;
 	job->pocsag = false;
-	job->sstv = false;
+	job->pcm = false;
+	job->pcm_fill = NULL;
+	job->pcm_ctx = NULL;
 	job->invert = false;
 	job->send_max_ms = RF_SEND_MAX_MS;
 	a.v.rf_active = true;
@@ -1643,7 +1649,7 @@ bool aprs_queue_afsk_burst(uint32_t hz, bool narrow, uint8_t level, const uint8_
 		a.raw.ook = false;
 		a.raw.p25 = false;
 		a.raw.pocsag = false;
-		a.raw.sstv = false;
+		a.raw.pcm = false;
 		a.raw.invert = false;
 		a.raw.send_max_ms = duration_ms != 0 ? duration_ms : RF_SEND_MAX_MS;
 		a.raw.pending = true;
@@ -1679,7 +1685,7 @@ bool aprs_queue_ook_burst(uint32_t hz, const uint8_t *bits, uint16_t nbits, uint
 		a.raw.ook = true;
 		a.raw.p25 = false;
 		a.raw.pocsag = false;
-		a.raw.sstv = false;
+		a.raw.pcm = false;
 		a.raw.invert = false;
 		a.raw.bit_us = bit_us;
 		a.raw.repeat = (uint8_t)(reps > 255u ? 255u : reps);
@@ -1711,7 +1717,7 @@ bool aprs_queue_p25_burst(uint32_t hz, const uint8_t *bytes, uint16_t len, uint3
 		a.raw.ook = false;
 		a.raw.p25 = true;
 		a.raw.pocsag = false;
-		a.raw.sstv = false;
+		a.raw.pcm = false;
 		a.raw.invert = false;
 		a.raw.send_max_ms = duration_ms != 0 ? duration_ms : 30000u;
 		a.raw.pending = true;
@@ -1742,7 +1748,7 @@ bool aprs_queue_pocsag_burst(uint32_t hz, const uint8_t *bits, uint16_t nbits, u
 		a.raw.ook = false;
 		a.raw.p25 = false;
 		a.raw.pocsag = true;
-		a.raw.sstv = false;
+		a.raw.pcm = false;
 		a.raw.invert = invert;
 		a.raw.send_max_ms = duration_ms != 0 ? duration_ms : 10000u;
 		a.raw.pending = true;
@@ -1753,10 +1759,11 @@ bool aprs_queue_pocsag_burst(uint32_t hz, const uint8_t *bits, uint16_t nbits, u
 	return ok;
 }
 
-// An SSTV stream (the SSTV TX app): core/sstv/sstv_tx.c fills the PCM; board.afsk->tx_pcm_start plays it.
-bool aprs_queue_sstv(uint32_t hz, uint8_t level, uint32_t duration_ms)
+// An audio stream (SSTV, the signal generator): fill writes the PCM; board.afsk->tx_pcm_start plays it.
+bool aprs_queue_pcm(uint32_t hz, uint8_t level, uint32_t duration_ms,
+		    size_t (*fill)(void *ctx, int16_t *out, size_t max), void *ctx)
 {
-	if (board.afsk == NULL || board.afsk->tx_pcm_start == NULL) {
+	if (fill == NULL || board.afsk == NULL || board.afsk->tx_pcm_start == NULL) {
 		return false;
 	}
 	LOCK();
@@ -1770,7 +1777,9 @@ bool aprs_queue_sstv(uint32_t hz, uint8_t level, uint32_t duration_ms)
 		a.raw.ook = false;
 		a.raw.p25 = false;
 		a.raw.pocsag = false;
-		a.raw.sstv = true;
+		a.raw.pcm = true;
+		a.raw.pcm_fill = fill;
+		a.raw.pcm_ctx = ctx;
 		a.raw.invert = false;
 		a.raw.send_max_ms = duration_ms != 0 ? duration_ms : 60000u;
 		a.raw.pending = true;

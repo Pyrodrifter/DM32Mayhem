@@ -188,7 +188,9 @@ typedef struct {
 	bool ook;		// an OOK burst: board.ook sends the bits by keying the PA, not the AFSK modulator
 	bool p25;		// a P25 PHY burst: board.p25_tx streams the bytes through the modem's 4FSK transmitter
 	bool pocsag;		// a POCSAG baseband burst: board.pocsag_tx sends the bits through the FM modulator
-	bool sstv;		// an SSTV stream: board.afsk->tx_pcm_start plays core/sstv/sstv_tx.c's PCM
+	bool pcm;		// an audio stream: pcm_fill writes 8 kHz PCM for board.afsk->tx_pcm_start
+	size_t (*pcm_fill)(void *ctx, int16_t *out, size_t max);
+	void *pcm_ctx;
 	bool invert;		// POCSAG: flip the data polarity
 	uint32_t bit_us;	// OOK: bit length
 	uint8_t repeat;		// OOK: transmissions
@@ -220,9 +222,11 @@ bool aprs_queue_p25_burst(uint32_t hz, const uint8_t *bytes, uint16_t len, uint3
 // long, or the board has no baseband FSK path
 bool aprs_queue_pocsag_burst(uint32_t hz, const uint8_t *bits, uint16_t nbits, uint16_t baud, bool invert,
 			     uint8_t level, uint32_t duration_ms);
-// An SSTV stream (the SSTV TX app): core/sstv fills the PCM, board.afsk->tx_pcm_start plays it. duration_ms is the
-// picture length plus margin. False: one is waiting, out of band, or the board has no PCM transmit path
-bool aprs_queue_sstv(uint32_t hz, uint8_t level, uint32_t duration_ms);
+// An audio stream (SSTV, the signal generator): fill writes full-scale signed 16-bit 8 kHz samples until it returns 0,
+// and level 0-100 scales them for the deviation. duration_ms caps it. False: one is waiting, out of band, or the
+// board has no PCM transmit path
+bool aprs_queue_pcm(uint32_t hz, uint8_t level, uint32_t duration_ms,
+		    size_t (*fill)(void *ctx, int16_t *out, size_t max), void *ctx);
 // Seconds a pending job may wait for a clear channel before it is dropped
 #define APRS_CSMA_GIVE_UP_MS	10000u
 

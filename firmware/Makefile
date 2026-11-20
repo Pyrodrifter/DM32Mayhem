@@ -118,8 +118,11 @@ endif
 ifeq ($(CONFIG_POCSAG),y)
 CORE_DIRS += core/pocsag
 endif
-ifeq ($(CONFIG_SSTV_RX),y)
+ifneq ($(filter y,$(CONFIG_SSTV_RX) $(CONFIG_SSTV_TX)),)
 CORE_DIRS += core/sstv
+endif
+ifeq ($(CONFIG_SIGGEN),y)
+CORE_DIRS += core/siggen
 endif
 ifeq ($(CONFIG_SNMP),y)
 CORE_DIRS += core/snmp

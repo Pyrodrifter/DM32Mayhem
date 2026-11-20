@@ -105,7 +105,7 @@ static void sstv_send(void)
 		return;
 	}
 	uint32_t ms = sstv_tx_ms(tx_mode);
-	if (aprs_queue_sstv(tx_hz, tx_level, ms + 3000u)) {
+	if (aprs_queue_pcm(tx_hz, tx_level, ms + 3000u, sstv_tx_read, NULL)) {
 		ui_toast("Sending");
 	} else {
 		ui_toast(TR("Busy"));
