@@ -184,7 +184,7 @@ static void sstv_draw(void)
 	} else {
 		sb_str(&b, TR("Waiting"));
 	}
-	int y = ui_draw_top(ui_view(), &ui_st, "SSTV", sub) + 1;
+	int y = ui_draw_top(ui_view(), &ui_st, "SSTV RX", sub) + 1;
 
 	// The frequency and the chosen mode, each on its own line; the selected one is highlighted
 	const font_t *f = ui_layout.small;

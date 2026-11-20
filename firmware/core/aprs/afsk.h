@@ -40,6 +40,9 @@ void afsk_mod_tone(afsk_mod_t *m, uint32_t baud, uint32_t mark_hz, uint32_t spac
 // again until it returns 0
 size_t afsk_mod(afsk_mod_t *m, const uint8_t *tones, uint32_t nbits, int16_t amp, int16_t *out, size_t max);
 
+// The modulator's full-scale sine sample at a 32-bit phase (2^32 = one turn). The SSTV transmitter reuses it.
+int16_t afsk_sine(uint32_t phase);
+
 // A frame the demodulator found (FCS good): bytes without the FCS
 typedef void (*afsk_frame_fn)(const uint8_t *frame, size_t n, void *ctx);
 

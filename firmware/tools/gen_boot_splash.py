@@ -40,14 +40,21 @@ def edge_color(img):
     return (r // n, g // n, b // n)
 
 
-def render(path, width, height):
+def render(path, width, height, crop=False):
     src = Image.open(path).convert("RGB")
     sw, sh = src.size
-    scale = min(width / sw, height / sh)
-    nw, nh = max(1, round(sw * scale)), max(1, round(sh * scale))
-    art = src.resize((nw, nh), Image.LANCZOS)
-    canvas = Image.new("RGB", (width, height), edge_color(art))
-    canvas.paste(art, ((width - nw) // 2, (height - nh) // 2))
+    if crop:
+        scale = max(width / sw, height / sh)
+        nw, nh = max(width, round(sw * scale)), max(height, round(sh * scale))
+        art = src.resize((nw, nh), Image.LANCZOS)
+        left, top = (nw - width) // 2, (nh - height) // 2
+        canvas = art.crop((left, top, left + width, top + height))
+    else:
+        scale = min(width / sw, height / sh)
+        nw, nh = max(1, round(sw * scale)), max(1, round(sh * scale))
+        art = src.resize((nw, nh), Image.LANCZOS)
+        canvas = Image.new("RGB", (width, height), edge_color(art))
+        canvas.paste(art, ((width - nw) // 2, (height - nh) // 2))
     # tobytes() of a P image is one palette index a pixel. Octree covers the small, saturated accents (the wordmark
     # and the radio's screen) that median cut, splitting by population, folds into the dark background
     return canvas.quantize(colors=16, method=Image.FASTOCTREE, dither=Image.FLOYDSTEINBERG)
@@ -113,11 +120,13 @@ def main():
     ap.add_argument("--palette", help="prefix for the palette and bits arrays (default: <name>_DATA)")
     ap.add_argument("--width", type=int, default=240)
     ap.add_argument("--height", type=int, default=320)
+    ap.add_argument("--crop", action="store_true",
+                    help="scale to cover and center-crop to the size, instead of letterboxing")
     ap.add_argument("--preview", help="also write the quantized image as a PNG")
     args = ap.parse_args()
     if args.palette is None:
         args.palette = args.name.upper() + "_DATA"
-    q = render(args.input, args.width, args.height)
+    q = render(args.input, args.width, args.height, args.crop)
     if args.preview:
         q.convert("RGB").save(args.preview)
     text = emit(args, q)

@@ -47,6 +47,9 @@ static bool irq_set;
 // the full FIFO refused waits in chunk[] for the next tick: the modulator's phase has moved past it
 static int16_t chunk[C7_PROMPT_CHUNK];
 static bool pending;
+static size_t (*pcm_fill)(void *ctx, int16_t *out, size_t max);
+static void *pcm_ctx;
+static bool pcm_mode;
 
 
 static void fill(void)
@@ -79,7 +82,17 @@ static void fill(void)
 				}
 			} else
 #endif
-			{
+			if (pcm_mode) {
+				size_t got = pcm_fill(pcm_ctx, chunk, C7_PROMPT_CHUNK);
+				if (got == 0) {
+					done = true;
+					return;
+				}
+				n = got;
+				for (size_t i = 0; i < n; i++) {
+					chunk[i] = (int16_t)(((int32_t)chunk[i] * amp) / 32767);
+				}
+			} else {
 				n = afsk_mod(&mod, tones, nbits, amp, chunk, C7_PROMPT_CHUNK);
 				if (n == 0) {
 					done = true;
@@ -149,6 +162,7 @@ static bool tx_start(const uint8_t *t, uint16_t n, uint16_t baud, uint16_t mark,
 #if CONFIG_POCSAG
 	baseband = false;
 #endif
+	pcm_mode = false;
 	afsk_mod_init(&mod, 8000u);
 	afsk_mod_tone(&mod, baud, mark, space);
 	done = false;
@@ -243,6 +257,37 @@ static bool pocsag_start(const uint8_t *bits, uint16_t n, uint16_t baud, bool in
 	return true;
 }
 
+// Raw PCM (SSTV): the generator fills the FIFO's chunks; the same timer, busy and stop as the tone path
+static bool tx_pcm_start(size_t (*fill_fn)(void *ctx, int16_t *out, size_t max), void *ctx, uint8_t level)
+{
+	if (modem == NULL || busy || fill_fn == NULL) {
+		return false;
+	}
+	if (!route(true)) {
+		return false;
+	}
+	pcm_fill = fill_fn;
+	pcm_ctx = ctx;
+	pcm_mode = true;
+#if CONFIG_POCSAG
+	baseband = false;
+#endif
+	int32_t a = (int32_t)level * hooks->amp_per_level;
+	amp = (int16_t)(a > 32000 ? 32000 : a);
+	done = false;
+	pending = false;
+	drain = 0;
+	if (!irq_set) {
+		hrc_irq_register(IRQ_TIMER4, tick);
+		hrc_irq_enable(IRQ_TIMER4, true);
+		irq_set = true;
+	}
+	fill();
+	busy = true;
+	hrc_timer_periodic(TIMER_AFSK, TICK_US);
+	return true;
+}
+
 const hal_pocsag_tx_t hrc_pocsag = {
 	.start = pocsag_start,
 	.busy = tx_busy,
@@ -254,6 +299,7 @@ const hal_afsk_t hrc_afsk = {
 	.tx_start = tx_start,
 	.tx_busy = tx_busy,
 	.tx_stop = tx_stop,
+	.tx_pcm_start = tx_pcm_start,
 #if CONFIG_APRS_RX && CONFIG_DMR
 	.rx_rate_hz = HRC7000_FM_RX_RATE,
 	.rx_start = rx_start,

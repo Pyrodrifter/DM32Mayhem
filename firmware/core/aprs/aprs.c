@@ -101,6 +101,7 @@ static struct {
 		bool ook;
 		bool p25;
 		bool pocsag;
+		bool sstv;
 		bool invert;
 		uint32_t hz;
 		bool narrow;
@@ -1297,6 +1298,7 @@ bool aprs_rf_take(aprs_rf_job_t *job, uint32_t now_ms)
 		job->ook = a.raw.ook;
 		job->p25 = a.raw.p25;
 		job->pocsag = a.raw.pocsag;
+		job->sstv = a.raw.sstv;
 		job->invert = a.raw.invert;
 		job->bit_us = a.raw.bit_us;
 		job->repeat = a.raw.repeat;
@@ -1354,6 +1356,7 @@ bool aprs_rf_take(aprs_rf_job_t *job, uint32_t now_ms)
 	job->ook = false;
 	job->p25 = false;
 	job->pocsag = false;
+	job->sstv = false;
 	job->invert = false;
 	job->send_max_ms = RF_SEND_MAX_MS;
 	a.v.rf_active = true;
@@ -1640,6 +1643,7 @@ bool aprs_queue_afsk_burst(uint32_t hz, bool narrow, uint8_t level, const uint8_
 		a.raw.ook = false;
 		a.raw.p25 = false;
 		a.raw.pocsag = false;
+		a.raw.sstv = false;
 		a.raw.invert = false;
 		a.raw.send_max_ms = duration_ms != 0 ? duration_ms : RF_SEND_MAX_MS;
 		a.raw.pending = true;
@@ -1675,6 +1679,7 @@ bool aprs_queue_ook_burst(uint32_t hz, const uint8_t *bits, uint16_t nbits, uint
 		a.raw.ook = true;
 		a.raw.p25 = false;
 		a.raw.pocsag = false;
+		a.raw.sstv = false;
 		a.raw.invert = false;
 		a.raw.bit_us = bit_us;
 		a.raw.repeat = (uint8_t)(reps > 255u ? 255u : reps);
@@ -1706,6 +1711,7 @@ bool aprs_queue_p25_burst(uint32_t hz, const uint8_t *bytes, uint16_t len, uint3
 		a.raw.ook = false;
 		a.raw.p25 = true;
 		a.raw.pocsag = false;
+		a.raw.sstv = false;
 		a.raw.invert = false;
 		a.raw.send_max_ms = duration_ms != 0 ? duration_ms : 30000u;
 		a.raw.pending = true;
@@ -1736,8 +1742,37 @@ bool aprs_queue_pocsag_burst(uint32_t hz, const uint8_t *bits, uint16_t nbits, u
 		a.raw.ook = false;
 		a.raw.p25 = false;
 		a.raw.pocsag = true;
+		a.raw.sstv = false;
 		a.raw.invert = invert;
 		a.raw.send_max_ms = duration_ms != 0 ? duration_ms : 10000u;
+		a.raw.pending = true;
+		a.raw.taken = false;
+		changed();
+	}
+	UNLOCK();
+	return ok;
+}
+
+// An SSTV stream (the SSTV TX app): core/sstv/sstv_tx.c fills the PCM; board.afsk->tx_pcm_start plays it.
+bool aprs_queue_sstv(uint32_t hz, uint8_t level, uint32_t duration_ms)
+{
+	if (board.afsk == NULL || board.afsk->tx_pcm_start == NULL) {
+		return false;
+	}
+	LOCK();
+	bool ok = !a.raw.pending && band_tx(hz);
+	if (ok) {
+		a.raw.hz = hz;
+		a.raw.narrow = false;
+		a.raw.level = level;
+		a.raw.nbits = 0;
+		a.raw.baud = 0;
+		a.raw.ook = false;
+		a.raw.p25 = false;
+		a.raw.pocsag = false;
+		a.raw.sstv = true;
+		a.raw.invert = false;
+		a.raw.send_max_ms = duration_ms != 0 ? duration_ms : 60000u;
 		a.raw.pending = true;
 		a.raw.taken = false;
 		changed();

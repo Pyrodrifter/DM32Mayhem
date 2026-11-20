@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef struct {
 	// Transmit (NULL tx_start, tx_busy and tx_stop when the board can only receive)
@@ -29,6 +30,9 @@ typedef struct {
 	bool (*tx_busy)(void);
 	// Stop (early or after the end) and give the transmitter its microphone back; the core unkeys after this
 	void (*tx_stop)(void);
+	// Optional raw PCM path (SSTV): fill() writes full-scale signed 16-bit samples at 8 kHz, level 0-100 scales them
+	// for the deviation. False when it can't (not keyed in FM, already sending)
+	bool (*tx_pcm_start)(size_t (*fill)(void *ctx, int16_t *out, size_t max), void *ctx, uint8_t level);
 
 	// Optional receive path (NULL / 0 when there is none)
 	uint32_t rx_rate_hz;

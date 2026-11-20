@@ -73,6 +73,9 @@ extern const ui_scr_def_t ui_find_screen;
 extern const ui_scr_def_t ui_aprs_screen, ui_aprs_heard_screen, ui_aprs_pos_screen, kiss_tnc_screen;	// ui_aprs.c
 extern const ui_scr_def_t ui_gps_screen;	// ui_gps.c
 extern const ui_scr_def_t ui_sstv_screen;	// ui_sstv.c
+#if CONFIG_SSTV_TX
+extern const ui_scr_def_t ui_sstv_tx_screen, ui_sstv_preview_screen;	// ui_sstv_tx.c
+#endif
 #if CONFIG_DUAL_WATCH
 extern const ui_scr_def_t ui_dual_screen, ui_dual_pick_screen, ui_dual_zone_screen;	// ui_dual.c
 #endif
@@ -6046,7 +6049,7 @@ typedef struct {
 	uint8_t scr;
 } menu_tx_tile_t;
 
-#if CONFIG_SAME_TX || CONFIG_OOK_TX || CONFIG_MDC_TX || CONFIG_P25CC_TX || CONFIG_APRS_TX || CONFIG_RTTY_TX || CONFIG_POCSAG
+#if CONFIG_SAME_TX || CONFIG_OOK_TX || CONFIG_MDC_TX || CONFIG_P25CC_TX || CONFIG_APRS_TX || CONFIG_RTTY_TX || CONFIG_POCSAG || CONFIG_SSTV_TX
 #define MENU_HAVE_TX	1
 static const menu_tx_tile_t menu_tx_tiles[] = {
 #if CONFIG_SAME_TX
@@ -6070,6 +6073,9 @@ static const menu_tx_tile_t menu_tx_tiles[] = {
 #endif
 #if CONFIG_RTTY_TX
 	{ "RTTY", icon_rtty, SCR_RTTY_TX },
+#endif
+#if CONFIG_SSTV_TX
+	{ "SSTV TX", icon_sstv, SCR_SSTV_TX },
 #endif
 };
 #define MENU_TX_TILES	(sizeof(menu_tx_tiles) / sizeof(menu_tx_tiles[0]))
@@ -6102,7 +6108,7 @@ static const menu_tx_tile_t menu_trx_tiles[] = {
 #define MENU_TRX_TILES	(sizeof(menu_trx_tiles) / sizeof(menu_trx_tiles[0]))
 #endif
 
-// Experimental: apps that are in the tree but not ready for the main RX/TX grids (ACARS, POCSAG RX, SSTV today)
+// Experimental: apps that are in the tree but not ready for the main RX/TX grids (ACARS, POCSAG RX, SSTV RX today)
 #if CONFIG_ACARS || CONFIG_POCSAG || CONFIG_SSTV_RX
 static const menu_tx_tile_t menu_exp_tiles[] = {
 #if CONFIG_ACARS
@@ -6112,7 +6118,7 @@ static const menu_tx_tile_t menu_exp_tiles[] = {
 	{ "POCSAG RX", icon_pulse, SCR_POCSAG },
 #endif
 #if CONFIG_SSTV_RX
-	{ "SSTV", icon_sstv, SCR_SSTV_RX },
+	{ "SSTV RX", icon_sstv, SCR_SSTV_RX },
 #endif
 };
 #define MENU_EXP_TILES	(sizeof(menu_exp_tiles) / sizeof(menu_exp_tiles[0]))
@@ -6157,7 +6163,7 @@ static const char *menu_tile_label(uint16_t menu, uint16_t i)
 	if (menu == MENU_TRX)
 		return i < MENU_TRX_TILES ? menu_trx_tiles[i].label : "";
 #endif
-#if CONFIG_ACARS || CONFIG_POCSAG
+#if CONFIG_ACARS || CONFIG_POCSAG || CONFIG_SSTV_RX
 	if (menu == MENU_EXP)
 		return i < MENU_EXP_TILES ? menu_exp_tiles[i].label : "";
 #endif
@@ -6198,7 +6204,7 @@ static void menu_icon(uint16_t menu, uint16_t i, int ox, int oy, int s, color_t 
 		return;
 	}
 #endif
-#if CONFIG_ACARS || CONFIG_POCSAG
+#if CONFIG_ACARS || CONFIG_POCSAG || CONFIG_SSTV_RX
 	if (menu == MENU_EXP) {
 		if (i < MENU_EXP_TILES)
 			menu_exp_tiles[i].icon(ox, oy, s, c);
@@ -6241,7 +6247,7 @@ static void menu_activate(uint16_t menu, uint16_t i)
 		return;
 	}
 #endif
-#if CONFIG_ACARS || CONFIG_POCSAG
+#if CONFIG_ACARS || CONFIG_POCSAG || CONFIG_SSTV_RX
 	if (menu == MENU_EXP) {
 		if (i < MENU_EXP_TILES)
 			ui_push(menu_exp_tiles[i].scr, 0);
@@ -9397,6 +9403,7 @@ static uint32_t prx_dbg_ms;
 int16_t pocsag_capture[4096];
 volatile uint32_t pocsag_capture_w;
 volatile uint8_t pocsag_capture_hold;
+static uint32_t pocsag_capture_at;	// ms: when the squelch opened, plus the preamble, to start at the sync
 static bool pocsag_new;
 static uint32_t pocsag_rx_hz = 439987500u;
 static uint8_t pocsag_rx_baud_idx;		// 0 1200, 1 512, 2 2400, 3 Auto
@@ -9454,6 +9461,10 @@ static uint16_t pocsag_rx_baud(void)
 static void pocsag_monitor_start(void)
 {
 	pocsag_monitor_stop();
+	pocsag_capture_w = 0;
+	pocsag_capture_hold = 0;
+	pocsag_capture_at = 0;
+	prx_peak = 0;
 	pocsag_rx_init(&pocsag_rx, pocsag_rx_baud(), pocsag_rx_cb, NULL);
 	radio_req_vfo(true);
 	radio_req_vfo_set(pocsag_rx_hz);
@@ -9472,23 +9483,28 @@ static void pocsag_monitor_start(void)
 
 static bool pocsag_rx_tick(uint32_t now)
 {
-	(void)now;
 	if (!pocsag_active || board.afsk == NULL || board.afsk->rx_read == NULL) {
 		return false;
 	}
+	// Arm the capture when the page opens the squelch, then wait out the preamble (0.48 s) so the buffer starts at
+	// the sync and covers the first batch: the address at slot 14 and the message word.
+	if (pocsag_capture_at == 0 && pocsag_capture_w == 0 && ui_view()->state == RS_RX) {
+		pocsag_capture_at = now + 450u;
+	}
+	bool capturing = pocsag_capture_w > 0 ||
+		(pocsag_capture_at != 0 && (int32_t)(now - pocsag_capture_at) >= 0);
 	int16_t buf[160];
 	uint16_t n;
 	// At most a few reads a tick: the demodulator runs in this (UI) task, and a full ring drained in one go
 	// kept the task from feeding the watchdog when the audio outpaced it
 	for (int budget = 8; budget > 0 && (n = board.afsk->rx_read(buf, (uint16_t)(sizeof buf / sizeof buf[0]))) != 0;
 	     budget--) {
-		for (uint16_t k = 0; k < n && !pocsag_capture_hold; k++) {
+		for (uint16_t k = 0; k < n; k++) {
 			int32_t a = buf[k] < 0 ? -buf[k] : buf[k];
 			if (a > prx_peak) {
 				prx_peak = a;
 			}
-			// Freeze the first 512 ms from the page onset: the preamble, the sync and the first codewords
-			if (pocsag_capture_w > 0 || a > 4000) {
+			if (!pocsag_capture_hold && (pocsag_capture_w > 0 || capturing)) {
 				pocsag_capture[pocsag_capture_w++] = buf[k];
 				if (pocsag_capture_w >= 4096u) {
 					pocsag_capture_hold = 1;
@@ -9504,8 +9520,10 @@ static bool pocsag_rx_tick(uint32_t now)
 			sy += pocsag_rx.d[k].syncs;
 			w += pocsag_rx.d[k].words;
 		}
-		dlog("pocsag: n=%u sy=%u w=%u pk=%d sh=%08x syn=%u", (unsigned)pocsag_rx.samples, (unsigned)sy,
-		     (unsigned)w, (int)prx_peak, (unsigned)pocsag_rx.d[0].shift, pocsag_rx.d[0].synced);
+		dlog("pocsag: n=%u sy=%u w=%u pk=%d sh=%08x syn=%u st=%u rssi=%d cap=%u/%u",
+		     (unsigned)pocsag_rx.samples, (unsigned)sy, (unsigned)w, (int)prx_peak,
+		     (unsigned)pocsag_rx.d[0].shift, pocsag_rx.d[0].synced, (unsigned)ui_view()->state,
+		     (int)ui_view()->rssi_dbm, (unsigned)pocsag_capture_w, (unsigned)pocsag_capture_hold);
 		prx_peak = 0;
 	}
 	bool redraw = pocsag_new;
@@ -10686,6 +10704,10 @@ const ui_scr_def_t *const ui_scr[SCR_COUNT] = {
 #endif
 #if CONFIG_SSTV_RX
 	[SCR_SSTV_RX] = &ui_sstv_screen,
+#endif
+#if CONFIG_SSTV_TX
+	[SCR_SSTV_TX] = &ui_sstv_tx_screen,
+	[SCR_SSTV_PREVIEW] = &ui_sstv_preview_screen,
 #endif
 #if CONFIG_CRASH_SCREEN
 	[SCR_CRASH] = &crash_screen,

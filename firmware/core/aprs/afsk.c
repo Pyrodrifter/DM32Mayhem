@@ -24,6 +24,11 @@ static const int16_t sine[256] = {
 	-12539, -11793, -11039, -10278, -9512, -8739, -7962, -7179, -6393, -5602, -4808, -4011, -3212, -2410, -1608, -804,
 };
 
+int16_t afsk_sine(uint32_t phase)
+{
+	return sine[(phase >> 24) & 0xFFu];
+}
+
 static uint32_t phase_inc(uint32_t hz, uint32_t rate)
 {
 	return (uint32_t)(((uint64_t)hz << 32) / rate);
