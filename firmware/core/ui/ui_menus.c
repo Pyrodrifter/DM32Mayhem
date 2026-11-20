@@ -8173,7 +8173,7 @@ static const ui_scr_def_t p25cc_screen = {
 #if CONFIG_APRS_TX
 // ======================= APRS transmit (CONFIG_APRS_TX) =======================
 // Compose and send a status, a message or a position through the APRS engine, which frames the AX.25, keys and retries.
-// The callsign and frequency come from the radio's APRS settings, so there is no second callsign field here.
+// The callsign and frequency are the radio's APRS settings; the first two rows edit them here.
 
 enum { APRSTX_ROW_CALL, APRSTX_ROW_FREQ, APRSTX_ROW_STATE, APRSTX_ROW_STATUS, APRSTX_ROW_TO, APRSTX_ROW_MSG,
        APRSTX_ROW_SEND_STATUS, APRSTX_ROW_SEND_MSG, APRSTX_ROW_SEND_POS, APRSTX_ROW_COUNT };
@@ -8181,6 +8181,10 @@ enum { APRSTX_ROW_CALL, APRSTX_ROW_FREQ, APRSTX_ROW_STATE, APRSTX_ROW_STATUS, AP
 static char aprstx_status[APRS_STATUS_MAX + 1];
 static char aprstx_to[AX25_CALL_LEN + 4];
 static char aprstx_msg[APRS_MSG_TEXT_MAX + 1];
+static char aprstx_call[AX25_CALL_LEN + 4];
+static bool aprstx_freq_edit;
+static char aprstx_digits[UI_ENTRY_MAX + 1];
+static uint8_t aprstx_dlen;
 
 static const char *aprstx_block_text(uint8_t b)
 {
@@ -8214,8 +8218,13 @@ static void aprstx_item(uint16_t i, ui_item_t *it)
 		break;
 	case APRSTX_ROW_FREQ:
 		str_copy(it->label, sizeof it->label, "Frequency");
-		if (v.freq_hz != 0) {
+		if (aprstx_freq_edit) {
+			it->flags |= UI_ITEM_EDIT;
+			sb_str(&b, aprstx_dlen != 0 ? aprstx_digits : "type digits");
+		} else if (v.freq_hz != 0) {
 			sb_freq(&b, v.freq_hz);
+		} else {
+			sb_str(&b, "-");
 		}
 		break;
 	case APRSTX_ROW_STATE:
@@ -8248,12 +8257,139 @@ static void aprstx_item(uint16_t i, ui_item_t *it)
 	}
 }
 
+// The callsign keeps an optional -SSID: the base call is the radio name, the SSID the APRS config
+static void aprstx_call_kept(void)
+{
+	char call[AX25_CALL_LEN + 4];
+	str_copy(call, sizeof call, aprstx_call);
+	char *p = call;
+	while (*p == ' ') {
+		p++;
+	}
+	char *dash = strchr(p, '-');
+	uint8_t ssid = 0;
+	if (dash != NULL) {
+		*dash = '\0';
+		uint16_t n = 0;
+		for (const char *q = dash + 1; *q >= '0' && *q <= '9'; q++) {
+			n = (uint16_t)(n * 10u + (uint16_t)(*q - '0'));
+		}
+		if (n <= 15) {
+			ssid = (uint8_t)n;
+		}
+	}
+	for (char *q = p; *q != '\0'; q++) {
+		if (*q >= 'a' && *q <= 'z') {
+			*q = (char)(*q - 'a' + 'A');
+		}
+	}
+	if (!aprs_callsign_ok(p)) {
+		ui_toast("Not a valid callsign");
+		return;
+	}
+	aprs_cfg_t c;
+	ui_svc_aprs_cfg(&c);
+	c.ssid = ssid;
+	ui_svc_aprs_set_cfg(&c);
+	aprs_set_test_call(p);
+	(void)ui_svc_name_set(UI_NAME_RADIO, p);
+	ui_toast("Callsign set");
+	ui_dirty();
+}
+
+static void aprstx_call_begin(void)
+{
+	aprs_view_t v;
+	str_copy(aprstx_call, sizeof aprstx_call, ui_svc_aprs_view(&v) ? v.call : "");
+	ui_text_open_done(TR("Callsign"), aprstx_call, sizeof aprstx_call, aprstx_call_kept);
+}
+
+static void aprstx_freq_begin(void)
+{
+	aprs_view_t v;
+	uint32_t hz = ui_svc_aprs_view(&v) ? v.freq_hz : 0;
+	uint32_t x = hz / 10u;
+	aprstx_dlen = UI_ENTRY_MAX;
+	for (int i = UI_ENTRY_MAX - 1; i >= 0; i--) {
+		aprstx_digits[i] = (char)('0' + x % 10u);
+		x /= 10u;
+	}
+	aprstx_digits[UI_ENTRY_MAX] = '\0';
+	aprstx_freq_edit = true;
+	ui_dirty();
+}
+
+static void aprstx_freq_commit(void)
+{
+	uint32_t hz = ui_freq_entry_hz(aprstx_digits, aprstx_dlen);
+	if (hz != 0) {
+		aprs_cfg_t c;
+		ui_svc_aprs_cfg(&c);
+		c.region = APRS_REGION_CUSTOM;
+		c.freq_hz = hz;
+		ui_svc_aprs_set_cfg(&c);
+		radio_req_vfo_set(hz);
+		radio_req_mode(RADIO_MODE_FM);
+		ui_toast("Frequency set");
+	}
+	aprstx_freq_edit = false;
+	ui_dirty();
+}
+
+static bool aprstx_key(const input_event_t *ev)
+{
+	if (!aprstx_freq_edit) {
+		return false;
+	}
+	bool press = ev->gesture == GESTURE_PRESS || ev->gesture == GESTURE_LONG;
+	int d = ev->action >= ACT_DIGIT_0 && ev->action <= ACT_DIGIT_9 ? ev->action - ACT_DIGIT_0 : -1;
+	if (d >= 0 && press) {
+		if (aprstx_dlen >= UI_ENTRY_MAX) {
+			aprstx_dlen = 0;
+		}
+		(void)ui_freq_entry_digit(aprstx_digits, &aprstx_dlen, (char)('0' + d));
+		ui_dirty();
+		return true;
+	}
+	if (ev->action == ACT_BACK && press) {
+		if (aprstx_dlen != 0) {
+			aprstx_digits[--aprstx_dlen] = '\0';
+		} else {
+			aprstx_freq_edit = false;
+		}
+		ui_dirty();
+		return true;
+	}
+	if (ev->action == ACT_CONTEXT && press) {
+		aprstx_freq_edit = false;
+		ui_dirty();
+		return true;
+	}
+	if (ev->action == ACT_SELECT && press) {
+		aprstx_freq_commit();
+		return true;
+	}
+	return true;
+}
+
+static void aprstx_enter(void)
+{
+	aprstx_freq_edit = false;
+	ui_dirty();
+}
+
 static void aprstx_select(uint16_t i, bool hold)
 {
 	(void)hold;
 	aprs_view_t v;
 	bool have = ui_svc_aprs_view(&v);
 	switch (i) {
+	case APRSTX_ROW_CALL:
+		aprstx_call_begin();
+		return;
+	case APRSTX_ROW_FREQ:
+		aprstx_freq_begin();
+		return;
 	case APRSTX_ROW_STATUS:
 		ui_text_open_title(aprstx_status, APRS_STATUS_MAX, "Status");
 		break;
@@ -8297,7 +8433,8 @@ static void aprstx_select(uint16_t i, bool hold)
 static const ui_scr_def_t aprstx_screen = {
 	.name = "aprs-tx", .flags = SF_LIST | SF_NUMBERED | SF_FIELD, .prefix = TRN("APRS TX"),
 	.hint = TRN("OK change  Back"),
-	.count = aprstx_count, .item = aprstx_item, .select = aprstx_select,
+	.count = aprstx_count, .item = aprstx_item, .select = aprstx_select, .key = aprstx_key,
+	.enter = aprstx_enter,
 };
 #endif	// CONFIG_APRS_TX
 

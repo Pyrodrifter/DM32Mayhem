@@ -24,7 +24,14 @@ WEAK bool ui_svc_aprs_send_now(void) { return false; }
 WEAK uint8_t ui_svc_aprs_station_count(void) { return 0; }
 WEAK bool ui_svc_aprs_station(uint8_t i, aprs_station_t *out) { (void)i; (void)out; return false; }
 
-enum { AP_SEND, AP_AUTO, AP_FREQ, AP_POWER, AP_PATH, AP_INTERVAL, AP_SMART, AP_VIA, AP_POS, AP_DMR_GPS, AP_KISS, AP_HEARD, AP_COUNT };
+enum { AP_CALL, AP_SEND, AP_AUTO, AP_FREQ, AP_CUSTOM, AP_POWER, AP_PATH, AP_INTERVAL, AP_SMART, AP_VIA, AP_POS,
+       AP_DMR_GPS, AP_KISS, AP_HEARD, AP_COUNT };
+
+// The callsign and the custom frequency editors (the KISS TNC screen sets them the same way)
+static char ap_call[AX25_CALL_LEN + 4];
+static bool ap_freq_edit;
+static char ap_digits[UI_ENTRY_MAX + 1];
+static uint8_t ap_dlen;
 
 static const uint16_t intervals[] = { 0, 60, 120, 300, 600, 1800 };
 static const char *const interval_names[] = { TRN("Off"), TRN("1 min"), TRN("2 min"), TRN("5 min"),
@@ -113,10 +120,10 @@ static uint8_t interval_index(uint16_t s)
 
 static void aprs_item(uint16_t i, ui_item_t *it)
 {
-	static const char *const names[] = { TRN("Send position now"), TRN("Automatic beacons"), TRN("Frequency"),
-					     TRN("Power"), TRN("Path"), TRN("Interval"), TRN("SmartBeaconing"),
-					     TRN("Send via"), TRN("Position"), TRN("Position in DMR calls"),
-					     TRN("KISS on USB"), TRN("Stations heard") };
+	static const char *const names[] = { TRN("Callsign"), TRN("Send position now"), TRN("Automatic beacons"),
+					     TRN("Frequency"), TRN("Custom frequency"), TRN("Power"), TRN("Path"),
+					     TRN("Interval"), TRN("SmartBeaconing"), TRN("Send via"), TRN("Position"),
+					     TRN("Position in DMR calls"), TRN("KISS on USB"), TRN("Stations heard") };
 	aprs_view_t v;
 	aprs_cfg_t c;
 	bool built = ui_svc_aprs_view(&v);
@@ -130,6 +137,9 @@ static void aprs_item(uint16_t i, ui_item_t *it)
 		return;
 	}
 	switch (i) {
+	case AP_CALL:
+		sb_str(&b, v.call[0] != '\0' ? v.call : TR("Not set"));
+		break;
 	case AP_SEND:
 		if (v.block != APRS_OK && c.via == APRS_VIA_RF) {
 			it->flags |= UI_ITEM_DIM;
@@ -143,6 +153,16 @@ static void aprs_item(uint16_t i, ui_item_t *it)
 			sb_freq(&b, c.freq_hz);
 		} else {
 			sb_str(&b, tr(region_names[c.region < APRS_REGION_COUNT ? c.region : 0]));
+		}
+		break;
+	case AP_CUSTOM:
+		if (ap_freq_edit) {
+			it->flags |= UI_ITEM_EDIT;
+			sb_str(&b, ap_dlen != 0 ? ap_digits : TR("type digits"));
+		} else if (c.region == APRS_REGION_CUSTOM && c.freq_hz != 0) {
+			sb_freq(&b, c.freq_hz);
+		} else {
+			sb_str(&b, "-");
 		}
 		break;
 	case AP_POWER:
@@ -182,6 +202,127 @@ static void aprs_item(uint16_t i, ui_item_t *it)
 	}
 }
 
+// The callsign text keeps an optional -SSID: the base call goes to the radio name, the SSID to the APRS config
+static void ap_callsign_kept(void)
+{
+	char call[AX25_CALL_LEN + 4];
+	str_copy(call, sizeof call, ap_call);
+	char *p = call;
+	while (*p == ' ') {
+		p++;
+	}
+	char *dash = strchr(p, '-');
+	uint8_t ssid = 0;
+	if (dash != NULL) {
+		*dash = '\0';
+		uint16_t n = 0;
+		for (const char *q = dash + 1; *q >= '0' && *q <= '9'; q++) {
+			n = (uint16_t)(n * 10u + (uint16_t)(*q - '0'));
+		}
+		if (n <= 15) {
+			ssid = (uint8_t)n;
+		}
+	}
+	for (char *q = p; *q != '\0'; q++) {
+		if (*q >= 'a' && *q <= 'z') {
+			*q = (char)(*q - 'a' + 'A');
+		}
+	}
+	if (!aprs_callsign_ok(p)) {
+		ui_toast(TR("Not a valid callsign"));
+		return;
+	}
+	aprs_cfg_t c;
+	ui_svc_aprs_cfg(&c);
+	c.ssid = ssid;
+	ui_svc_aprs_set_cfg(&c);
+	aprs_set_test_call(p);
+	(void)ui_svc_name_set(UI_NAME_RADIO, p);
+	ui_toast(TR("Callsign set"));
+	ui_dirty();
+}
+
+static void ap_call_begin(void)
+{
+	aprs_view_t v;
+	str_copy(ap_call, sizeof ap_call, ui_svc_aprs_view(&v) ? v.call : "");
+	ui_text_open_done(TR("Callsign"), ap_call, sizeof ap_call, ap_callsign_kept);
+}
+
+static void ap_freq_begin(void)
+{
+	aprs_view_t v;
+	uint32_t hz = ui_svc_aprs_view(&v) ? v.freq_hz : 0;
+	uint32_t x = hz / 10u;
+	ap_dlen = UI_ENTRY_MAX;
+	for (int i = UI_ENTRY_MAX - 1; i >= 0; i--) {
+		ap_digits[i] = (char)('0' + x % 10u);
+		x /= 10u;
+	}
+	ap_digits[UI_ENTRY_MAX] = '\0';
+	ap_freq_edit = true;
+	ui_dirty();
+}
+
+static void ap_freq_commit(void)
+{
+	uint32_t hz = ui_freq_entry_hz(ap_digits, ap_dlen);
+	if (hz != 0) {
+		aprs_cfg_t c;
+		ui_svc_aprs_cfg(&c);
+		c.region = APRS_REGION_CUSTOM;
+		c.freq_hz = hz;
+		ui_svc_aprs_set_cfg(&c);
+		radio_req_vfo_set(hz);
+		radio_req_mode(RADIO_MODE_FM);
+		ui_toast(TR("Frequency set"));
+	}
+	ap_freq_edit = false;
+	ui_dirty();
+}
+
+static bool aprs_key(const input_event_t *ev)
+{
+	if (!ap_freq_edit) {
+		return false;
+	}
+	bool press = ev->gesture == GESTURE_PRESS || ev->gesture == GESTURE_LONG;
+	int d = ev->action >= ACT_DIGIT_0 && ev->action <= ACT_DIGIT_9 ? ev->action - ACT_DIGIT_0 : -1;
+	if (d >= 0 && press) {
+		if (ap_dlen >= UI_ENTRY_MAX) {
+			ap_dlen = 0;	// the first digit replaces the value shown
+		}
+		(void)ui_freq_entry_digit(ap_digits, &ap_dlen, (char)('0' + d));
+		ui_dirty();
+		return true;
+	}
+	if (ev->action == ACT_BACK && press) {
+		if (ap_dlen != 0) {
+			ap_digits[--ap_dlen] = '\0';
+		} else {
+			ap_freq_edit = false;
+		}
+		ui_dirty();
+		return true;
+	}
+	if (ev->action == ACT_CONTEXT && press) {
+		ap_freq_edit = false;
+		ui_dirty();
+		return true;
+	}
+	if (ev->action == ACT_SELECT && press) {
+		ap_freq_commit();
+		return true;
+	}
+	return true;
+}
+
+static void aprs_enter(void)
+{
+	ap_freq_edit = false;
+	ui_dirty();
+}
+
 static void aprs_select(uint16_t i, bool hold)
 {
 	(void)hold;
@@ -193,6 +334,8 @@ static void aprs_select(uint16_t i, bool hold)
 	}
 	ui_svc_aprs_cfg(&c);
 	switch (i) {
+	case AP_CALL: ap_call_begin(); return;
+	case AP_CUSTOM: ap_freq_begin(); return;
 	case AP_SEND:
 		if (ui_svc_aprs_send_now()) {
 			ui_toast(TR("Sending position"));
@@ -432,8 +575,10 @@ const ui_scr_def_t ui_aprs_pos_screen = {
 };
 
 const ui_scr_def_t ui_aprs_screen = {
-	.name = "aprs", .flags = SF_LIST | SF_NUMBERED | SF_FIELD, .prefix = "APRS", .hint = TRN("0-9 pick  Back"),
-	.count = aprs_count, .item = aprs_item, .select = aprs_select, .body = aprs_body,
+	.name = "aprs", .flags = SF_LIST | SF_NUMBERED | SF_FIELD, .prefix = "APRS",
+	.hint = TRN("OK change  0-9 pick  Back"),
+	.count = aprs_count, .item = aprs_item, .select = aprs_select, .key = aprs_key, .enter = aprs_enter,
+	.body = aprs_body,
 };
 
 // --- Stations heard (receive builds) ---
