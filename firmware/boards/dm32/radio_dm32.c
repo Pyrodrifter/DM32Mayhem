@@ -458,7 +458,7 @@ static void speaker_source(void)
 	// The FD6818's output is squelched noise while the squelch is closed: the speaker listens to it only while it is open.
 	// The APRS and P25 listeners need it in the HR_C7000 even with the squelch closed, so they count as open
 	bool listen = aprs_listen || p25_listen;
-	bool fm_open = mode == RADIO_MODE_FM && !transmitting && !pcm_on && (rx_audio || p25_listen);
+	bool fm_open = mode == RADIO_MODE_FM && !transmitting && !pcm_on && (rx_audio || listen);
 	bool analog = fm_open && !listen;
 	hrc_pin_write(PIN_SPK_SOURCE, analog);
 	if (!transmitting) {

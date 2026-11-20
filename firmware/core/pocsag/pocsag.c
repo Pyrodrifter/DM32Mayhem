@@ -321,10 +321,9 @@ static void dec_bit(pocsag_rx_t *rx, pocsag_dec_t *d, uint8_t bit)
 		}
 		return;
 	}
-	if (d->invert) {
-		bit ^= 1u;
-	}
 	if (d->expect_sync) {
+		// The sync is raw: the polarity it shows is the one the data after it will use. Do not un-invert it first,
+		// or a page whose first sync was inverted would be read as normal and every later codeword would be wrong.
 		d->sync_shift = (d->sync_shift << 1) | bit;
 		d->cw_bits++;
 		if (d->cw_bits == 32u) {
@@ -345,6 +344,9 @@ static void dec_bit(pocsag_rx_t *rx, pocsag_dec_t *d, uint8_t bit)
 			}
 		}
 		return;
+	}
+	if (d->invert) {
+		bit ^= 1u;
 	}
 	d->cw = (d->cw << 1) | bit;
 	d->cw_bits++;
