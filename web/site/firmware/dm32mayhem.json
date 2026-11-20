@@ -2,18 +2,18 @@
   "format": "rfoundry-release/1",
   "board": "dm32",
   "board_name": "Baofeng DM-32UV",
-  "version": "v26.22",
-  "git": "f0caf2ec",
-  "git_full": "f0caf2ecb5cbbadd07c202a9b0b8eb2372f4699b",
+  "version": "v26.23",
+  "git": "efc8ae48",
+  "git_full": "efc8ae48a663f85118731802e80dc1c3933c4af9",
   "image": {
     "file": "dm32mayhem.bin",
-    "size": 495096,
-    "sha256": "1139f3667e4e78045f0aad76cdb73e80293258d3efa4006d85c3fee8b0b98571"
+    "size": 496408,
+    "sha256": "3ef84bb76bc83bdac174d654707835699788f3186c9183ae2e628e3be2f92fdc"
   },
   "ranges": [
     {
       "addr": "0x0300C000",
-      "size": 495096
+      "size": 496408
     }
   ],
   "sectors": [
@@ -37,5 +37,5 @@
   "toolchain": "csky-elf-gcc (GCC) 14.2.0",
   "variant": "full",
   "off": "LANG_IT,LANG_DEFAULT_ES,LANG_DEFAULT_IT,SSTV_RX,SSTV_TX,SIGGEN,NO_PTT,BOOT_GATE,OOK_TX,MDC_TX,P25CC_TX,APRS_TX,RTTY_TX,RTTY_RX,VIBRATE,P25_PROBE,BBS,SAME_TX",
-  "git_time": 1795171633
+  "git_time": 1795173049
 }
