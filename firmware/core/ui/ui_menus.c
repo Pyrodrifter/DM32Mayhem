@@ -10,6 +10,9 @@
 #include "ui_nav.h"
 #include "debuglink/dlog.h"
 #include "ui_svc.h"
+#if CONFIG_DMR_SNIFF
+#include "ui_dmr_sniff.h"
+#endif
 #include "fmt.h"
 #include "codeplug/codeplug.h"
 #include "config.h"
@@ -6087,10 +6090,13 @@ static const menu_tx_tile_t menu_tx_tiles[] = {
 #define MENU_TX_TILES	(sizeof(menu_tx_tiles) / sizeof(menu_tx_tiles[0]))
 #endif
 
-#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX
+#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX || CONFIG_DMR_SNIFF
 static const menu_tx_tile_t menu_rx_tiles[] = {
 #if CONFIG_RTTY_RX
 	{ "RTTY", icon_rtty, SCR_RTTY_RX },
+#endif
+#if CONFIG_DMR_SNIFF
+	{ "DMR", icon_pulse, SCR_DMR_SNIFF },
 #endif
 #if CONFIG_GPS_SKY
 	{ "GPS", icon_gps, SCR_GPS },
@@ -6140,7 +6146,7 @@ static uint16_t menu_count(uint16_t menu)
 	if (menu == MENU_TX)
 		return MENU_TX_TILES;
 #endif
-#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX
+#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX || CONFIG_DMR_SNIFF
 	if (menu == MENU_RX)
 		return MENU_RX_TILES;
 #endif
@@ -6161,7 +6167,7 @@ static const char *menu_tile_label(uint16_t menu, uint16_t i)
 	if (menu == MENU_TX)
 		return i < MENU_TX_TILES ? menu_tx_tiles[i].label : "";
 #endif
-#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX
+#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX || CONFIG_DMR_SNIFF
 	if (menu == MENU_RX)
 		return i < MENU_RX_TILES ? menu_rx_tiles[i].label : "";
 #endif
@@ -6196,7 +6202,7 @@ static void menu_icon(uint16_t menu, uint16_t i, int ox, int oy, int s, color_t 
 		return;
 	}
 #endif
-#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX
+#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX || CONFIG_DMR_SNIFF
 	if (menu == MENU_RX) {
 		if (i < MENU_RX_TILES)
 			menu_rx_tiles[i].icon(ox, oy, s, c);
@@ -6239,7 +6245,7 @@ static void menu_activate(uint16_t menu, uint16_t i)
 		return;
 	}
 #endif
-#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX
+#if CONFIG_RTTY_RX || CONFIG_GPS_SKY || CONFIG_SSTV_RX || CONFIG_DMR_SNIFF
 	if (menu == MENU_RX) {
 		if (i < MENU_RX_TILES)
 			ui_push(menu_rx_tiles[i].scr, 0);
@@ -10816,6 +10822,9 @@ const ui_scr_def_t *const ui_scr[SCR_COUNT] = {
 #endif
 #if CONFIG_ACARS
 	[SCR_ACARS] = &acars_screen, [SCR_ACARS_MSGS] = &acars_msgs_screen, [SCR_ACARS_CH] = &acars_ch_screen,
+#endif
+#if CONFIG_DMR_SNIFF
+	[SCR_DMR_SNIFF] = &dmr_sniff_screen, [SCR_DMR_SNIFF_LOG] = &dmr_sniff_log_screen,
 #endif
 #if CONFIG_POCSAG
 	[SCR_POCSAG] = &pocsag_rx_screen, [SCR_POCSAG_TX] = &pocsag_tx_screen, [SCR_POCSAG_MSGS] = &pocsag_pages_screen,

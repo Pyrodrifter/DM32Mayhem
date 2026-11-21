@@ -353,6 +353,7 @@ typedef struct {
 	bool manual_vfo;
 	// Hear all latched (RREQ_DMR_HEAR_ALL) on channel latch_ch
 	bool hear_all_latch;
+	bool any_cc_latch;	// with it, any color code too (RREQ_DMR_HEAR_ALL arg 2: the DMR sniffer)
 	uint16_t latch_ch;
 	bool latch_vfo;
 	// The focused row's target (RREQ_DMR_FOCUS) and the one-shot target PTT took from it: the talk target until

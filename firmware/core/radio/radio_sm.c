@@ -949,6 +949,7 @@ static void dmr_load_channel(radio_sm_t *sm)
 	}
 	if (sm->hear_all_latch && (sm->latch_vfo != sm->view.vfo || sm->latch_ch != sm->view.channel_number)) {
 		sm->hear_all_latch = false;	// so does the hear all latch
+		sm->any_cc_latch = false;
 	}
 	if (sm->one_shot && (sm->view.vfo || sm->one_shot_ch != sm->view.channel_number)) {
 		sm->one_shot = false;		// and a one-shot target
@@ -1027,6 +1028,7 @@ static void dmr_configure(radio_sm_t *sm)
 	cfg.talk_target.private_call = sm->one_shot ? sm->one_shot_private : sm->manual ? sm->manual_private :
 		sm->talk_private;
 	cfg.listen.hear_all = sm->view.monitor || sm->hear_all_latch;
+	cfg.listen.any_cc = sm->hear_all_latch && sm->any_cc_latch;
 	cfg.listen.groups = sm->listen;
 	cfg.listen.group_count = sm->listen_count;
 	// The channel's TX time-out when it has one, else the radio's
@@ -1080,6 +1082,7 @@ static void dmr_configure(radio_sm_t *sm)
 	sm->view.dmr.own_id = cfg.own_id;
 	sm->view.dmr.hear_all = cfg.listen.hear_all;
 	sm->view.dmr.hear_all_latch = sm->hear_all_latch;
+	sm->view.dmr.any_cc = cfg.listen.any_cc;
 	sm->view.dmr.one_shot = sm->one_shot;
 	sm->view.dmr.target_manual = sm->manual;
 	// The target with its flags in one update (dmr_publish copies the stack's own at the next tick): a reader never
@@ -1149,12 +1152,14 @@ static void dmr_reconfigure(radio_sm_t *sm)
 
 // Digital monitor (the hear all latch: every talkgroup on the slot and color code) on or off, for this channel
 // (RREQ_DMR_HEAR_ALL, and the monitor key's press on DMR)
-static void set_hear_all_latch(radio_sm_t *sm, bool on)
+static void set_hear_all_latch(radio_sm_t *sm, bool on, bool any_cc)
 {
-	if (on == sm->hear_all_latch) {
+	any_cc = on && any_cc;
+	if (on == sm->hear_all_latch && any_cc == sm->any_cc_latch) {
 		return;
 	}
 	sm->hear_all_latch = on;
+	sm->any_cc_latch = any_cc;
 	sm->latch_ch = sm->view.channel_number;
 	sm->latch_vfo = sm->view.vfo;
 	sm->view.dmr.hear_all_latch = on;
@@ -1324,7 +1329,9 @@ static void dmr_end(radio_sm_t *sm)
 	sm->one_shot = false;
 	sm->view.dmr.one_shot = false;
 	sm->hear_all_latch = false;	// and so does the hear all latch
+	sm->any_cc_latch = false;
 	sm->view.dmr.hear_all_latch = false;
+	sm->view.dmr.any_cc = false;
 	sm->view.dmr.hear_all = sm->view.monitor;
 	memset(&sm->view.dmr.call, 0, sizeof(sm->view.dmr.call));
 	sm->view.dmr.active = false;
@@ -2159,6 +2166,7 @@ static void dual_keep_load(radio_sm_t *sm, uint8_t i)
 	sm->manual_ch = sm->view.channel_number;
 	sm->manual_vfo = sm->view.vfo;
 	sm->hear_all_latch = k->hear_all_latch;
+	sm->any_cc_latch = false;		// the sniffer's any color code isn't kept: it turns it on again
 	sm->latch_ch = sm->view.channel_number;
 	sm->latch_vfo = sm->view.vfo;
 #endif
@@ -5193,7 +5201,7 @@ void radio_sm_request(radio_sm_t *sm, const radio_req_t *req, uint32_t now_ms)
 		// the key is held. A key held across a change to DMR is still released here
 		if (sm->view.ch.mode == RADIO_MODE_DMR && !sm->view.monitor) {
 			if (req->arg == 0) {
-				set_hear_all_latch(sm, !sm->hear_all_latch);
+				set_hear_all_latch(sm, !sm->hear_all_latch, false);
 			}
 			break;
 		}
@@ -5367,7 +5375,7 @@ void radio_sm_request(radio_sm_t *sm, const radio_req_t *req, uint32_t now_ms)
 		tune(sm, now_ms);	// the call stack starts or stops with the mode
 		break;
 	case RREQ_DMR_HEAR_ALL:
-		set_hear_all_latch(sm, req->arg != 0);
+		set_hear_all_latch(sm, req->arg != 0, req->arg == 2);	// 2: any color code too
 		break;
 	case RREQ_DMR_FOCUS: {
 		uint32_t id = (uint32_t)req->arg & DMR_ID_MAX;

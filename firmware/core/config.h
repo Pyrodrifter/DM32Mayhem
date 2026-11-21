@@ -329,6 +329,11 @@
 #ifndef CONFIG_ACARS
 #define CONFIG_ACARS			(CONFIG_AM_RX && CONFIG_APRS_RX && CONFIG_DMR)
 #endif
+// The DMR sniffer app (core/ui/ui_dmr_sniff.c): every DMR call on a frequency, any color code; receive only. Needs
+// VFO_DMR
+#ifndef CONFIG_DMR_SNIFF
+#define CONFIG_DMR_SNIFF		0
+#endif
 #ifndef CONFIG_APRS_IGATE
 #define CONFIG_APRS_IGATE		(CONFIG_APRS_RX && CONFIG_HOSTLINK)
 #endif

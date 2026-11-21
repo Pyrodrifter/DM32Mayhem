@@ -2568,6 +2568,27 @@ static void test_ui_requests(void)
 	run(50);
 	CHECK(!d->hear_all_latch && !d->hear_all);
 
+	// Hear all on any color code (the DMR sniffer): a call on CC 7 plays on this CC 2 channel and the view shows its
+	// CC; the plain latch doesn't hear it, and a channel change clears both
+	hear_call(true, 3100, 3107777, 7, 1, true);
+	run(1000);
+	req(RREQ_DMR_HEAR_ALL, 1);
+	CHECK(d->hear_all_latch && !d->any_cc);
+	hear_call(true, 3100, 3107777, 7, 1, false);
+	CHECK(d->state != RDMR_RX);
+	hear_call(true, 3100, 3107777, 7, 0, true);
+	run(1000);
+	req(RREQ_DMR_HEAR_ALL, 2);
+	CHECK(d->hear_all && d->hear_all_latch && d->any_cc);
+	hear_call(true, 3100, 3107777, 7, 1, false);
+	CHECK(d->state == RDMR_RX && d->call.src == 3107777 && d->cc == 7);
+	hear_call(true, 3100, 3107777, 7, 0, true);
+	run(1000);
+	req(RREQ_CH_STEP, 1);
+	req(RREQ_CH_STEP, -1);
+	run(50);
+	CHECK(!d->hear_all_latch && !d->any_cc);
+
 	// One-shot: PTT with Joe focused calls Joe once and keeps him for the reply window, then TG 201 again
 	req(RREQ_DMR_FOCUS, (int32_t)(3101234u | (1u << 24)));
 	CHECK(d->focus_id == 3101234 && d->focus_private);
@@ -2697,6 +2718,7 @@ radio_vfo_copy_t radio_req_vfo_copy_checked(void)
 	return r;
 }
 void radio_req_dmr_hear_all(bool on) { req(RREQ_DMR_HEAR_ALL, on); }
+void radio_req_dmr_hear_any(bool on) { req(RREQ_DMR_HEAR_ALL, on ? 2 : 0); }
 static int focus_posts;
 void radio_req_dmr_focus(uint32_t id, bool p)
 {

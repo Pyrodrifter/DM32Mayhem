@@ -120,6 +120,11 @@ APRSLIB := $(CORE)/aprs/ax25.c $(CORE)/aprs/hdlc.c $(CORE)/aprs/afsk.c $(CORE)/a
 aprsTest: aprsTest.c $(APRSLIB) $(wildcard $(CORE)/aprs/*.h)
 	$(CC) $(CFLAGS) -o $@ aprsTest.c $(APRSLIB) -lm
 
+# The DMR sniffer's call tracker and serial line (CONFIG_DMR_SNIFF)
+TESTS   += dmrSniffTest
+dmrSniffTest: dmrSniffTest.c $(CORE)/ui/dmr_sniff.c $(CORE)/ui/dmr_sniff.h $(CORE)/ui/fmt.c
+	$(CC) $(CFLAGS) -I../../hal -o $@ dmrSniffTest.c $(CORE)/ui/dmr_sniff.c $(CORE)/ui/fmt.c -lm
+
 # SSTV receive: a synthetic Martin M1 VIS header and lines through the decoder
 TESTS   += sstvTest
 sstvTest: sstvTest.c $(CORE)/sstv/sstv_rx.c $(CORE)/sstv/sstv_rx.h

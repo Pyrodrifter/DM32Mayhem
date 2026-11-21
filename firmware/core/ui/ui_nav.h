@@ -57,6 +57,8 @@ typedef enum {
 	SCR_POCSAG_TX,			// the POCSAG pager transmitter (CONFIG_POCSAG)
 	SCR_POCSAG_MSGS,		// the pages the POCSAG receiver heard
 	SCR_FM_TRX,			// the FM transceiver app (CONFIG_FM_TRX): the one screen where PTT is live
+	SCR_DMR_SNIFF,			// the DMR sniffer (CONFIG_DMR_SNIFF, ui_dmr_sniff.c): every call on a frequency
+	SCR_DMR_SNIFF_LOG,		// the calls it heard
 	SCR_COUNT
 } ui_scr_t;
 
